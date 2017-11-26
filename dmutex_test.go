@@ -45,7 +45,7 @@ func Test_Dmutex(t *testing.T) {
 		err := dmutex.Quorums.BuildCurrQuorums()
 		So(err, ShouldBeNil)
 
-		mlist, err := InitMembersList("127.0.0.1", nodes)
+		mlist, err := InitMembersList("127.0.0.1:7946", nodes)
 
 		So(err, ShouldBeNil)
 		So(mlist.Members()[0].Addr.String(), ShouldEqual, "127.0.0.1")
