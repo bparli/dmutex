@@ -7,6 +7,7 @@ import (
 
 	"github.com/bparli/dmutex/bintree"
 	"github.com/bparli/dmutex/queue"
+	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -36,12 +37,12 @@ func Test_Dmutex(t *testing.T) {
 
 		nodes := []string{"127.0.0.1"}
 		t, _ := bintree.NewTree(nodes)
-		dmutex.Quorums = newQuorums(t, nodes, "127.0.0.1")
+		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
 		for _, member := range nodes {
-			dmutex.Quorums.currMembers[member] = true
+			dmutex.Quorums.CurrMembers[member] = true
 		}
 
-		err := dmutex.Quorums.buildCurrQuorums()
+		err := dmutex.Quorums.BuildCurrQuorums()
 		So(err, ShouldBeNil)
 
 		setupTestRPC()

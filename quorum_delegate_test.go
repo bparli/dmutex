@@ -7,6 +7,7 @@ import (
 
 	"github.com/bparli/dmutex/bintree"
 	"github.com/bparli/dmutex/queue"
+	"github.com/bparli/dmutex/quorums"
 	"github.com/hashicorp/memberlist"
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -15,12 +16,12 @@ func Test_Delegates(t *testing.T) {
 	Convey("Test Delegates", t, func() {
 		nodes := []string{"127.0.0.1", "127.0.0.2", "127.0.0.3", "127.0.0.4", "127.0.0.5"}
 		t, _ := bintree.NewTree(nodes)
-		quorums := newQuorums(t, nodes, "127.0.0.3")
+		qms := quorums.NewQuorums(t, nodes, "127.0.0.3")
 		for _, member := range nodes {
-			quorums.currMembers[member] = true
+			qms.CurrMembers[member] = true
 		}
 
-		err := quorums.buildCurrQuorums()
+		err := qms.BuildCurrQuorums()
 		So(err, ShouldBeNil)
 
 		testDel := newEventDelegate()
@@ -31,23 +32,23 @@ func Test_Delegates(t *testing.T) {
 		setupTestRPC()
 
 		dmutex = &Dmutex{
-			Quorums:      quorums,
+			Quorums:      qms,
 			rpcServer:    testServer,
 			localRequest: &queue.Mssg{},
 			gateway:      &sync.Mutex{},
 		}
 
-		So(quorums.currPeers["127.0.0.5"], ShouldBeTrue)
-		So(quorums.currMembers["127.0.0.5"], ShouldBeTrue)
+		So(qms.CurrPeers["127.0.0.5"], ShouldBeTrue)
+		So(qms.CurrMembers["127.0.0.5"], ShouldBeTrue)
 
-		quorums.Ready = true
+		qms.Ready = true
 		testDel.NotifyLeave(testNode)
-		So(quorums.currPeers["127.0.0.5"], ShouldBeFalse)
-		So(quorums.currMembers["127.0.0.5"], ShouldBeFalse)
+		So(qms.CurrPeers["127.0.0.5"], ShouldBeFalse)
+		So(qms.CurrMembers["127.0.0.5"], ShouldBeFalse)
 
 		testDel.NotifyJoin(testNode)
-		So(quorums.currPeers["127.0.0.5"], ShouldBeTrue)
-		So(quorums.currMembers["127.0.0.5"], ShouldBeTrue)
+		So(qms.CurrPeers["127.0.0.5"], ShouldBeTrue)
+		So(qms.CurrMembers["127.0.0.5"], ShouldBeTrue)
 
 	})
 }

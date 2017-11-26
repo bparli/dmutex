@@ -33,7 +33,7 @@ func joinHandler(node *memberlist.Node) {
 
 		recover(node, true)
 
-		log.Infoln("Node", node.Addr.String(), "joined.  Current quorums are now ", dmutex.Quorums.myCurrQuorums, "Health is", dmutex.Quorums.Healthy)
+		log.Infoln("Node", node.Addr.String(), "joined.  Current quorums are now ", dmutex.Quorums.MyCurrQuorums, "Health is", dmutex.Quorums.Healthy)
 	}
 }
 
@@ -44,21 +44,21 @@ func leaveHandler(node *memberlist.Node) {
 
 		recover(node, false)
 
-		log.Infoln("Node", node.Addr.String(), "left.  Current quorums are now ", dmutex.Quorums.myCurrQuorums, "Health is", dmutex.Quorums.Healthy)
+		log.Infoln("Node", node.Addr.String(), "left.  Current quorums are now ", dmutex.Quorums.MyCurrQuorums, "Health is", dmutex.Quorums.Healthy)
 	}
 }
 
 func recover(node *memberlist.Node, joined bool) {
 	dmutex.rpcServer.SetReady(false)
 
-	dmutex.Quorums.currMembers[node.Addr.String()] = joined
-	if err := dmutex.Quorums.buildCurrQuorums(); err != nil {
+	dmutex.Quorums.CurrMembers[node.Addr.String()] = joined
+	if err := dmutex.Quorums.BuildCurrQuorums(); err != nil {
 		log.Errorln("Error re-building current quorums", err.Error())
 	}
 
 	server.PurgeNodeFromQueue(node.Addr.String())
 
-	dmutex.Quorums.checkHealth()
+	dmutex.Quorums.CheckHealth()
 	dmutex.rpcServer.SanitizeQueue()
 	dmutex.rpcServer.SetReady(true)
 }

@@ -9,16 +9,18 @@ import (
 
 	"github.com/bparli/dmutex/bintree"
 	"github.com/bparli/dmutex/queue"
+	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	dmutex *Dmutex
+	dmutex   *Dmutex
+	nodeAddr string
 )
 
 type Dmutex struct {
-	Quorums      *QuorumsState
+	Quorums      *quorums.QState
 	rpcServer    *server.RPCServer
 	gateway      *sync.Mutex
 	localRequest *queue.Mssg
@@ -33,16 +35,17 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 		nodeIPs = append(nodeIPs, nodeIP)
 	}
 	localIP := strings.Split(localAddr, ":")[0]
+	nodeAddr = localAddr
 
 	t, err := bintree.NewTree(nodeIPs)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	quorums := newQuorums(t, nodeIPs, localIP)
+	qms := quorums.NewQuorums(t, nodeIPs, localIP)
 
 	dmutex = &Dmutex{
-		Quorums:      quorums,
+		Quorums:      qms,
 		rpcServer:    &server.RPCServer{},
 		localRequest: &queue.Mssg{},
 		gateway:      &sync.Mutex{},
@@ -59,8 +62,8 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 	}
 
 	for {
-		log.Debugln("Quorums not ready for node:", localAddr, "Current Quorums:", quorums.myCurrQuorums, "Ideal Quorums", quorums.myQuorums)
-		if !dmutex.Quorums.validateMyQuorums(dmutex.Quorums.myQuorums) || dmutex.Quorums.Mlist.NumMembers() != len(nodes) {
+		log.Debugln("Quorums not ready for node:", localAddr, "Current Quorums:", qms.MyCurrQuorums, "Ideal Quorums", qms.MyQuorums)
+		if !dmutex.Quorums.ValidateMyQuorums() || dmutex.Quorums.Mlist.NumMembers() != len(nodes) {
 			time.Sleep(1 * time.Second)
 		} else {
 			dmutex.Quorums.Ready = true
@@ -71,7 +74,7 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 
 	dmutex.rpcServer.SetReady(true)
 
-	log.Debugln("Quorums Validated, testing distributed mutex", quorums.myCurrQuorums)
+	log.Debugln("Quorums Validated, testing distributed mutex", qms.MyCurrQuorums)
 
 	if err := dmutex.Lock(); err != nil {
 		log.Fatalln("Unable to Acquire test mutex", err)
@@ -126,11 +129,11 @@ func (d *Dmutex) Lock() error {
 		d.gateway.Lock()
 		defer d.gateway.Unlock()
 
-		ch := make(chan error, len(d.Quorums.currMembers))
+		ch := make(chan error, len(d.Quorums.CurrMembers))
 		var wg sync.WaitGroup
 		args := &queue.Mssg{
 			Timestamp: time.Now(),
-			Node:      d.Quorums.localAddr,
+			Node:      nodeAddr,
 			Replied:   false,
 		}
 
@@ -138,8 +141,8 @@ func (d *Dmutex) Lock() error {
 
 		d.rpcServer.SetProgress(server.ProgressNotAcquired)
 
-		for peer := range d.Quorums.currPeers {
-			if d.Quorums.currPeers[peer] {
+		for peer := range d.Quorums.CurrPeers {
+			if d.Quorums.CurrPeers[peer] {
 				wg.Add(1)
 				go sendRequest(args, peer, &wg, ch)
 			}
@@ -153,7 +156,7 @@ func (d *Dmutex) Lock() error {
 		}
 
 		c := make(chan error, 1)
-		go func() { c <- d.rpcServer.GatherReplies(args, d.Quorums.currPeers) }()
+		go func() { c <- d.rpcServer.GatherReplies(args, d.Quorums.CurrPeers) }()
 		select {
 		case err := <-c:
 			return err
@@ -169,7 +172,7 @@ func (d *Dmutex) UnLock() error {
 	d.gateway.Lock()
 	defer d.gateway.Unlock()
 
-	ch := make(chan error, len(d.Quorums.currMembers))
+	ch := make(chan error, len(d.Quorums.CurrMembers))
 
 	args := d.localRequest
 
@@ -182,8 +185,8 @@ func (d *Dmutex) UnLock() error {
 
 func (d *Dmutex) relinquish(args *queue.Mssg, ch chan error) {
 	var wg sync.WaitGroup
-	for peer := range d.Quorums.currPeers {
-		if d.Quorums.currPeers[peer] {
+	for peer := range d.Quorums.CurrPeers {
+		if d.Quorums.CurrPeers[peer] {
 			wg.Add(1)
 			go sendRelinquish(args, peer, &wg, ch)
 		}
@@ -193,8 +196,8 @@ func (d *Dmutex) relinquish(args *queue.Mssg, ch chan error) {
 }
 
 func (d *Dmutex) checkForError(ch chan error) error {
-	for peer := range d.Quorums.currPeers {
-		if d.Quorums.currPeers[peer] {
+	for peer := range d.Quorums.CurrPeers {
+		if d.Quorums.CurrPeers[peer] {
 			err := <-ch
 			if err != nil {
 				return err
