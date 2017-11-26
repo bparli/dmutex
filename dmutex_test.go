@@ -8,24 +8,31 @@ import (
 	"github.com/bparli/dmutex/bintree"
 	"github.com/bparli/dmutex/queue"
 	"github.com/bparli/dmutex/server"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-// use same RPC server for all tests in dmutex package.
-var testServer *server.RPCServer
+var (
+	testServer *server.RPCServer
+	started    bool
+)
 
 func setupTestRPC() {
-	if testServer == nil {
-		testServer = server.NewRPCServer("127.0.0.1", 10, 1*time.Second)
+	var err error
+	if !started || testServer == nil {
+		testServer, err = server.NewRPCServer("127.0.0.1", 10, 10*time.Second)
+		if err != nil {
+			return
+		}
 	}
+	started = true
+	testServer.SetReady(true)
 }
 
 func Test_Dmutex(t *testing.T) {
 	Convey("Test Send Request and Relinquish", t, func() {
 
-		d := &Dmutex{
-			rpcServer: testServer,
-		}
+		dmutex = &Dmutex{}
 
 		nodes := []string{"127.0.0.1"}
 		t, _ := bintree.NewTree(nodes)
@@ -38,6 +45,7 @@ func Test_Dmutex(t *testing.T) {
 		So(err, ShouldBeNil)
 
 		setupTestRPC()
+		dmutex.rpcServer = testServer
 
 		dmutex.Quorums.Ready = true
 		dmutex.Quorums.Healthy = true
@@ -54,12 +62,12 @@ func Test_Dmutex(t *testing.T) {
 		go sendRequest(args, "127.0.0.1", &wg, ch)
 		wg.Wait()
 
-		err = d.checkForError(ch)
+		err = dmutex.checkForError(ch)
 		So(err, ShouldBeNil)
 
-		d.relinquish(args, ch)
+		dmutex.relinquish(args, ch)
 
-		err = d.checkForError(ch)
+		err = dmutex.checkForError(ch)
 		So(err, ShouldBeNil)
 
 		close(ch)

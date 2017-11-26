@@ -1,9 +1,6 @@
 package server
 
 import (
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"net/rpc"
 	"sync"
 	"testing"
@@ -13,16 +10,29 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-var testServer *RPCServer
+// use same RPC server for all tests in dmutex package.
+var (
+	testServer *RPCServer
+	started    bool
+)
+
+func setupTestRPC() {
+	var err error
+	if !started || testServer == nil {
+		testServer, err = NewRPCServer("127.0.0.1", 10, 10*time.Second)
+		if err != nil {
+			return
+		}
+	}
+	started = true
+	testServer.SetReady(true)
+}
 
 func Test_BasicServer(t *testing.T) {
 	Convey("Init server, Send request, and Gather Reply", t, func() {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintln(w, "Hello, client")
-		}))
-		defer ts.Close()
 
-		testServer = NewRPCServer("127.0.0.1", 3, 10*time.Second)
+		setupTestRPC()
+		testServer.SetReady(true)
 
 		t := time.Now()
 		args := &queue.Mssg{
@@ -96,6 +106,7 @@ func Test_Relinquish(t *testing.T) {
 		testServer.dsync.push(args)
 
 		var reply int
+
 		client, err := rpc.DialHTTP("tcp", "127.0.0.1:7070")
 		defer client.Close()
 
@@ -114,5 +125,26 @@ func Test_Relinquish(t *testing.T) {
 		err = client.Call("Dsync.Relinquish", argsB, &reply)
 		So(err, ShouldBeNil)
 
+		testServer.dsync.pop()
+
+		So(testServer.dsync.reqQueue.Len(), ShouldEqual, 0)
+	})
+}
+
+func Test_Sanitize(t *testing.T) {
+	Convey("Test Sanitize Queue", t, func() {
+		args := &queue.Mssg{
+			Timestamp: time.Now().Add(-Timeout * 2),
+			Node:      "127.0.0.1",
+			Replied:   false,
+		}
+		testServer.dsync.push(args)
+
+		check := (*testServer.dsync.reqQueue)[0]
+		So(testServer.dsync.reqQueue.Len(), ShouldEqual, 1)
+		So(check.Timestamp, ShouldEqual, args.Timestamp)
+
+		testServer.SanitizeQueue()
+		So(testServer.dsync.reqQueue.Len(), ShouldEqual, 0)
 	})
 }

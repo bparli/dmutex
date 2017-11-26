@@ -31,7 +31,7 @@ func joinHandler(node *memberlist.Node) {
 		dmutex.gateway.Lock()
 		defer dmutex.gateway.Unlock()
 
-		recover(node)
+		recover(node, true)
 
 		log.Infoln("Node", node.Addr.String(), "joined.  Current quorums are now ", dmutex.Quorums.myCurrQuorums, "Health is", dmutex.Quorums.Healthy)
 	}
@@ -42,16 +42,16 @@ func leaveHandler(node *memberlist.Node) {
 		dmutex.gateway.Lock()
 		defer dmutex.gateway.Unlock()
 
-		recover(node)
+		recover(node, false)
 
 		log.Infoln("Node", node.Addr.String(), "left.  Current quorums are now ", dmutex.Quorums.myCurrQuorums, "Health is", dmutex.Quorums.Healthy)
 	}
 }
 
-func recover(node *memberlist.Node) {
+func recover(node *memberlist.Node, joined bool) {
 	dmutex.rpcServer.SetReady(false)
 
-	dmutex.Quorums.currMembers[node.Addr.String()] = false
+	dmutex.Quorums.currMembers[node.Addr.String()] = joined
 	if err := dmutex.Quorums.buildCurrQuorums(); err != nil {
 		log.Errorln("Error re-building current quorums", err.Error())
 	}

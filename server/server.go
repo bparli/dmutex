@@ -243,7 +243,7 @@ func (d *Dsync) Relinquish(args *queue.Mssg, reply *int) error {
 	return nil
 }
 
-func NewRPCServer(addr string, numMembers int, timeout time.Duration) *RPCServer {
+func NewRPCServer(addr string, numMembers int, timeout time.Duration) (*RPCServer, error) {
 	reqQueue := &queue.ReqHeap{}
 	heap.Init(reqQueue)
 
@@ -273,7 +273,7 @@ func NewRPCServer(addr string, numMembers int, timeout time.Duration) *RPCServer
 
 	lis, err := net.Listen("tcp", addr+":"+RPCPort)
 	if err != nil {
-		log.Fatalln("Unable to initialize RPC server", err.Error())
+		return nil, errors.New("Unable to initialize RPC server: " + err.Error())
 	}
 
 	go http.Serve(lis, nil)
@@ -284,7 +284,7 @@ func NewRPCServer(addr string, numMembers int, timeout time.Duration) *RPCServer
 		srv:   srv,
 		lis:   lis,
 	}
-	return rpcSrv
+	return rpcSrv, nil
 }
 
 func (d *Dsync) pop() {

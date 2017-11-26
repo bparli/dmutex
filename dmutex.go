@@ -53,7 +53,10 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 		log.Errorln("Error initializing memberlist", err.Error())
 	}
 
-	dmutex.rpcServer = server.NewRPCServer(localAddr, len(nodes), timeout)
+	dmutex.rpcServer, err = server.NewRPCServer(localAddr, len(nodes), timeout)
+	if err != nil {
+		log.Fatalln(err)
+	}
 
 	for {
 		log.Debugln("Quorums not ready for node:", localAddr, "Current Quorums:", quorums.myCurrQuorums, "Ideal Quorums", quorums.myQuorums)

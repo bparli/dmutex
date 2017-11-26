@@ -2,9 +2,11 @@ package dmutex
 
 import (
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/bparli/dmutex/bintree"
+	"github.com/bparli/dmutex/queue"
 	"github.com/hashicorp/memberlist"
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -27,6 +29,16 @@ func Test_Delegates(t *testing.T) {
 		testNode := &memberlist.Node{Name: "127.0.0.5", Addr: ip}
 
 		setupTestRPC()
+
+		dmutex = &Dmutex{
+			Quorums:      quorums,
+			rpcServer:    testServer,
+			localRequest: &queue.Mssg{},
+			gateway:      &sync.Mutex{},
+		}
+
+		So(quorums.currPeers["127.0.0.5"], ShouldBeTrue)
+		So(quorums.currMembers["127.0.0.5"], ShouldBeTrue)
 
 		quorums.Ready = true
 		testDel.NotifyLeave(testNode)
