@@ -161,8 +161,11 @@ func (d *Dmutex) Lock() error {
 		case err := <-c:
 			return err
 		case <-time.After(server.Timeout):
+			// try to recover after a timeout to prevent getting into a cluster-wide timeout loop
+			server.PurgeNodeFromQueue(nodeAddr)
 			d.rpcServer.SanitizeQueue()
-			return errors.New("Gathering replies imed out")
+			d.rpcServer.TriggerQueueProcess()
+			return errors.New("Gathering replies timed out")
 		}
 	}
 }

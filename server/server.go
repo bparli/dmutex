@@ -147,6 +147,7 @@ func (d *Dsync) sendReply(reqArgs *queue.Mssg) error {
 func (d *Dsync) Request(args *queue.Mssg, reply *int) error {
 	for {
 		if !d.Ready {
+			time.Sleep(200 * time.Millisecond)
 			continue
 		} else {
 			break
@@ -335,9 +336,13 @@ func (r *RPCServer) SanitizeQueue() {
 
 	for i := 0; i < r.dsync.reqQueue.Len(); i++ {
 		check := (*r.dsync.reqQueue)[i]
-		if check.Timestamp.Add(Timeout).Before(time.Now()) {
+		if check.Timestamp.Add(Timeout).Before(time.Now()) && !check.Replied {
 			heap.Remove(r.dsync.reqQueue, i)
-			log.Errorln("Removed timeout from queue", check)
+			log.Errorln("Removed timeout from queue at time", time.Now(), check)
 		}
 	}
+}
+
+func (r *RPCServer) TriggerQueueProcess() {
+	r.dsync.processQueue()
 }
