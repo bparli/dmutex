@@ -147,7 +147,8 @@ func (d *Dsync) sendReply(reqArgs *queue.Mssg) error {
 func (d *Dsync) Request(args *queue.Mssg, reply *int) error {
 	for {
 		if !d.Ready {
-			time.Sleep(200 * time.Millisecond)
+			// be sure not to cpu starve memberlist threads
+			time.Sleep(time.Duration(100*totalMembers) * time.Millisecond)
 			continue
 		} else {
 			break
