@@ -4,13 +4,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bparli/dmutex/quorums"
 	"github.com/hashicorp/memberlist"
 	log "github.com/sirupsen/logrus"
 )
 
 var memberlistConfig *memberlist.Config
 
-func InitMembersList(localAddr string, peers []string) (*memberlist.Memberlist, error) {
+func InitMembersList(localAddr string, peers []string) (*quorums.MemList, error) {
 	memberlistConfig = memberlist.DefaultLANConfig()
 	memberlistConfig.Events = newEventDelegate()
 	addr := strings.Split(localAddr, ":")
@@ -35,5 +36,5 @@ func InitMembersList(localAddr string, peers []string) (*memberlist.Memberlist, 
 	if err != nil {
 		log.Errorln("Failed to join cluster: ", err.Error())
 	}
-	return mlist, nil
+	return &quorums.MemList{mlist}, nil
 }
