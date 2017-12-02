@@ -54,6 +54,7 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *QState {
 			count++
 		}
 	}
+
 	return &QState{
 		MyQuorums:     myQuorums,
 		MyCurrQuorums: myCurrQuorums,
@@ -64,6 +65,10 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *QState {
 		localAddr:     localAddr,
 		Ready:         false,
 		Healthy:       false}
+}
+
+func (q *QState) ExportMemberlist() *memberlist.Memberlist {
+	return q.Mlist
 }
 
 // build the tree, but only from healthy members in the cluster
