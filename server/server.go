@@ -226,18 +226,22 @@ func (d *Dsync) Relinquish(args *queue.Mssg, reply *int) error {
 		log.Errorln("Error with Relinquish.  Minimum item on queue is nil")
 		return nil // timeout may have occured while relinquish was in flight.  still want to log it though
 	}
+	// search the rest of the queue for the right relinquish
+	// messages might have arrived out of order
 	if item.Node != args.Node {
 		d.qMutex.RLock()
-		if d.reqQueue.Len() >= 2 {
-			next := (*d.reqQueue)[1]
-			d.qMutex.RUnlock()
-			if next.Node == args.Node { //  messages might have arrived out of order
-				d.remove(1)
-				d.processQueue()
-				return nil
-			} else {
-				return errors.New("Error with Relinquish.  Minimum item on queue is not from same node")
+		qlen := d.reqQueue.Len()
+		if qlen >= 2 {
+			for i := 1; i < qlen; i++ {
+				if (*d.reqQueue)[i].Node == args.Node {
+					d.qMutex.RUnlock()
+					d.remove(i)
+					d.processQueue()
+					return nil
+				}
 			}
+			d.qMutex.RUnlock()
+			return errors.New("Error with Relinquish.  Minimum item from node not found")
 		}
 	}
 	d.pop()
