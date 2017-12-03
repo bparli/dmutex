@@ -36,5 +36,5 @@ func InitMembersList(localAddr string, peers []string) (*quorums.MemList, error)
 	if err != nil {
 		log.Errorln("Failed to join cluster: ", err.Error())
 	}
-	return &quorums.MemList{mlist}, nil
+	return &quorums.MemList{Memberlist: mlist}, nil
 }
