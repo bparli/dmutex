@@ -129,6 +129,10 @@ func (d *Dmutex) Lock() error {
 		d.gateway.Lock()
 		defer d.gateway.Unlock()
 
+		if d.localRequest.Node != "" {
+			return errors.New("Dmutex Lock Error: outstanding lock detected")
+		}
+
 		ch := make(chan error, len(d.Quorums.CurrMembers))
 		var wg sync.WaitGroup
 		args := &queue.Mssg{
@@ -176,8 +180,8 @@ func (d *Dmutex) UnLock() error {
 	d.gateway.Lock()
 	defer d.gateway.Unlock()
 
-	if d.localRequest == nil {
-		return errors.New("No outstanding lock detected")
+	if d.localRequest.Node == "" {
+		return errors.New("Dmutex Unlock Error: no outstanding lock detected")
 	}
 
 	ch := make(chan error, len(d.Quorums.CurrMembers))
