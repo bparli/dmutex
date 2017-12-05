@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
-	"reflect"
 	"sync"
 	"time"
 
@@ -38,13 +37,18 @@ type Dsync struct {
 	ReqProgress int
 	reqsCh      chan *queue.Mssg
 	repliesCh   chan *queue.Mssg
-	Ready       bool
+}
+
+type Ready struct {
+	Flag  bool
+	Mutex *sync.RWMutex
 }
 
 type RPCServer struct {
 	dsync *Dsync
 	srv   *rpc.Server
 	lis   net.Listener
+	Ready *Ready
 }
 
 func (d *Dsync) processQueue() {
@@ -92,31 +96,33 @@ func (d *Dsync) Reply(args *queue.Mssg, reply *int) error {
 	return nil
 }
 
-func (r *RPCServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool) error {
-	track := make(map[string]bool)
-	log.Debugln("Gathering Replies, waiting on ", peers)
+func (r *RPCServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool, numMembers int) error {
+	log.Debugln("Gathering Replies, waiting on ", peers, reqArgs)
 
+	startTime := time.Now()
 	count := 0
-	for {
-		reply := <-r.dsync.repliesCh
-		if reply.Timestamp.Equal(reqArgs.Timestamp) {
-			track[reply.Node] = true
-			count++
-		}
-		if count >= len(peers) {
-			break
-		}
-	}
 
-	// should have all replies by now, double check
-	if !reflect.DeepEqual(track, peers) {
-		log.Debugln(track, peers)
-		r.SetProgress(ProgressNotAcquired)
-		return errors.New("Error gathering replies from all quorums peers")
-	} else {
-		r.SetProgress(ProgressAcquired)
-		return nil
+outer:
+	for {
+		select {
+		case reply := <-r.dsync.repliesCh:
+			res, ok := peers[reqArgs.Node]
+			if reply.Timestamp.Equal(reqArgs.Timestamp) && ok && res {
+				count++
+			}
+			if count >= len(peers) {
+				break outer
+			}
+		default:
+			if startTime.Add(time.Duration(numMembers) * Timeout).Before(time.Now()) {
+				return errors.New("Gathering replies timed out")
+			} else {
+				// be sure not to cpu starve other threads
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
 	}
+	return nil
 }
 
 func (d *Dsync) sendReply(reqArgs *queue.Mssg) error {
@@ -146,7 +152,7 @@ func (d *Dsync) sendReply(reqArgs *queue.Mssg) error {
 
 func (d *Dsync) Request(args *queue.Mssg, reply *int) error {
 	for {
-		if !d.Ready {
+		if !rpcSrv.CheckReady() {
 			// be sure not to cpu starve memberlist threads
 			time.Sleep(time.Duration(100*totalMembers) * time.Millisecond)
 			continue
@@ -154,6 +160,7 @@ func (d *Dsync) Request(args *queue.Mssg, reply *int) error {
 			break
 		}
 	}
+
 	if args.Timestamp.Add(Timeout).Before(time.Now()) {
 		return errors.New("Request has already timed out")
 	}
@@ -215,8 +222,16 @@ func (r *RPCServer) SetProgress(setting int) {
 	r.dsync.ReqProgress = setting
 }
 
+func (r *RPCServer) CheckReady() bool {
+	r.Ready.Mutex.RLock()
+	defer r.Ready.Mutex.RUnlock()
+	return r.Ready.Flag
+}
+
 func (r *RPCServer) SetReady(ready bool) {
-	r.dsync.Ready = ready
+	r.Ready.Mutex.Lock()
+	defer r.Ready.Mutex.Unlock()
+	r.Ready.Flag = ready
 }
 
 func (d *Dsync) Relinquish(args *queue.Mssg, reply *int) error {
@@ -264,6 +279,11 @@ func NewRPCServer(addr string, numMembers int, timeout time.Duration) (*RPCServe
 	// if another process is holding the distributed mutex
 	Timeout = timeout
 
+	ready := &Ready{
+		Mutex: &sync.RWMutex{},
+		Flag:  false,
+	}
+
 	dsync := &Dsync{
 		reqQueue:  reqQueue,
 		qMutex:    &sync.RWMutex{},
@@ -271,7 +291,6 @@ func NewRPCServer(addr string, numMembers int, timeout time.Duration) (*RPCServe
 		localAddr: addr,
 		reqsCh:    reqsCh,
 		repliesCh: repliesCh,
-		Ready:     false,
 	}
 
 	srv.Register(dsync)
@@ -289,6 +308,7 @@ func NewRPCServer(addr string, numMembers int, timeout time.Duration) (*RPCServe
 		dsync: dsync,
 		srv:   srv,
 		lis:   lis,
+		Ready: ready,
 	}
 	return rpcSrv, nil
 }
@@ -341,7 +361,7 @@ func (r *RPCServer) SanitizeQueue() {
 
 	for i := 0; i < r.dsync.reqQueue.Len(); i++ {
 		check := (*r.dsync.reqQueue)[i]
-		if check.Timestamp.Add(Timeout).Before(time.Now()) && !check.Replied {
+		if check.Timestamp.Add(2 * Timeout).Before(time.Now()) {
 			heap.Remove(r.dsync.reqQueue, i)
 			log.Errorln("Removed timeout from queue at time", time.Now(), check)
 		}

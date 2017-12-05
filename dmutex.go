@@ -24,10 +24,11 @@ type Dmutex struct {
 	rpcServer    *server.RPCServer
 	gateway      *sync.Mutex
 	localRequest *queue.Mssg
+	set          bool
 }
 
 func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex {
-	//log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.DebugLevel)
 
 	var nodeIPs []string
 	for _, node := range nodes {
@@ -49,6 +50,7 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 		rpcServer:    &server.RPCServer{},
 		localRequest: &queue.Mssg{},
 		gateway:      &sync.Mutex{},
+		set:          false,
 	}
 
 	dmutex.Quorums.Mlist, err = InitMembersList(localAddr, nodes)
@@ -121,17 +123,14 @@ func sendToPeer(method string, args *queue.Mssg, peer string) (int, error) {
 
 func (d *Dmutex) Lock() error {
 	if !d.Quorums.Healthy || !d.Quorums.Ready {
-		err := errors.New("Unable to obtain lock, quorums are not healthy")
-		log.Errorln(err)
-		return err
+		return errors.New("Unable to obtain lock, quorums are not healthy")
+	} else if d.set {
+		return errors.New("Unable to obtain lock, already set")
 	} else {
 		// set the lock in case this Lock() gets called again
 		d.gateway.Lock()
 		defer d.gateway.Unlock()
-
-		if d.localRequest.Node != "" {
-			return errors.New("Dmutex Lock Error: outstanding lock detected")
-		}
+		d.set = true
 
 		ch := make(chan error, len(d.Quorums.CurrMembers))
 		var wg sync.WaitGroup
@@ -156,33 +155,24 @@ func (d *Dmutex) Lock() error {
 		err := d.checkForError(ch)
 		close(ch)
 		if err != nil {
+			d.recover()
 			return err
 		}
 
-		c := make(chan error, 1)
-		go func() { c <- d.rpcServer.GatherReplies(args, d.Quorums.CurrPeers) }()
-		select {
-		case err := <-c:
-			return err
-		case <-time.After(server.Timeout):
-			// try to recover after a timeout to prevent getting into a cluster-wide timeout loop
-			d.localRequest = &queue.Mssg{}
-			server.PurgeNodeFromQueue(nodeAddr)
-			d.rpcServer.SanitizeQueue()
-			d.rpcServer.TriggerQueueProcess()
-			return errors.New("Gathering replies timed out")
+		if err = d.rpcServer.GatherReplies(args, d.Quorums.CurrPeers, len(d.Quorums.CurrMembers)); err != nil {
+			d.recover()
 		}
+		return err
 	}
 }
 
 func (d *Dmutex) UnLock() error {
+	if !d.set {
+		return errors.New("Dmutex Unlock Error: no outstanding lock detected")
+	}
 	// set the lock in case this Unlock() gets called again
 	d.gateway.Lock()
 	defer d.gateway.Unlock()
-
-	if d.localRequest.Node == "" {
-		return errors.New("Dmutex Unlock Error: no outstanding lock detected")
-	}
 
 	ch := make(chan error, len(d.Quorums.CurrMembers))
 
@@ -193,7 +183,16 @@ func (d *Dmutex) UnLock() error {
 
 	close(ch)
 	d.localRequest = &queue.Mssg{}
+	d.set = false
 	return err
+}
+
+func (d *Dmutex) recover() {
+	server.PurgeNodeFromQueue(nodeAddr)
+	d.rpcServer.SanitizeQueue()
+	d.rpcServer.TriggerQueueProcess()
+	d.localRequest = &queue.Mssg{}
+	d.set = false
 }
 
 func (d *Dmutex) relinquish(args *queue.Mssg, ch chan error) {

@@ -54,13 +54,13 @@ func Test_BasicServer(t *testing.T) {
 
 		peers := make(map[string]bool)
 		peers["127.0.0.1"] = true
-		errReply := testServer.GatherReplies(args, peers)
+		errReply := testServer.GatherReplies(args, peers, 1)
 		err = client.Call("Dsync.Reply", args, &reply)
 		So(err, ShouldBeNil)
 		So(errReply, ShouldBeNil)
 
 		peers["127.0.0.1"] = false
-		errReply = testServer.GatherReplies(args, peers)
+		errReply = testServer.GatherReplies(args, peers, 1)
 		err = client.Call("Dsync.Reply", args, &reply)
 		So(err, ShouldBeNil)
 		So(errReply, ShouldNotBeNil)

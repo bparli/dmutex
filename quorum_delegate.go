@@ -60,5 +60,6 @@ func recover(node *memberlist.Node, joined bool) {
 
 	dmutex.Quorums.CheckHealth()
 	dmutex.rpcServer.SanitizeQueue()
+	dmutex.rpcServer.TriggerQueueProcess()
 	dmutex.rpcServer.SetReady(true)
 }
