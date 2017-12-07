@@ -24,15 +24,15 @@ func dLockTest() {
   dm := dmutex.NewDMutex("192.168.1.12", nodes, 3*time.Second)
 
   if err := d.Lock(); err != nil {
-				log.Errorln("Lock error", err)
+	   log.Errorln("Lock error", err)
 	} else {
-		log.Debugln("Acquired Lock")
-		time.Sleep(time.Duration(100) * time.Millisecond)
-		if err := d.UnLock(); err != nil {
-			log.Errorln("Unlock Error", err)
-		} else {
-			log.Debugln("Released Lock")
-		}
+	  log.Debugln("Acquired Lock")
+	  time.Sleep(time.Duration(100) * time.Millisecond)
+	  if err := d.UnLock(); err != nil {
+		  log.Errorln("Unlock Error", err)
+	  } else {
+		  log.Debugln("Released Lock")
+	  }
 	}
 }
 ```
@@ -50,7 +50,7 @@ func dLockTest() {
 
   exportedMemberlist := dm.Quorums.ExportMemberlist()
   myMemberList, ok := exportedMemberlist.(*quorums.MemList)
-	if !ok {
+  if !ok {
 		log.Fatalln("Oops")
 	}
 
