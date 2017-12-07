@@ -4,7 +4,7 @@ Dmutex is a distributed mutex package written in Go.  It takes a quorum based ap
 
 Overview
 ===============
-Dmutex is inspired by the [Agarwal-El Abbadi quorum-based algorithm](Agarwal-El Abbadi quorum-based algorithm) with a notable difference; instead of running at a degradation anytime a node leaves the cluster, [Memberlist](https://github.com/hashicorp/memberlist) is used to pro-actively detect a node failure and re-compute the quorums.  There is a period where the cluster must fully converge to the new quorums, however.  A good overview of the algorithm can be found [here](https://www.cs.uic.edu/~ajayk/Chapter9.pdf) starting on page 50.
+Dmutex is inspired by the [Agarwal-El Abbadi quorum-based algorithm](http://www.dcc.fc.up.pt/~INES/aulas/1314/SDM/papers/FaultToleranceDMEagrawal.pdf) with a notable difference; instead of running at a degradation anytime a node leaves the cluster, [Memberlist](https://github.com/hashicorp/memberlist) is used to pro-actively detect a node failure and re-compute the quorums.  There is a period where the cluster must fully converge to the new quorums, however.  A good overview of the algorithm can be found [here](https://www.cs.uic.edu/~ajayk/Chapter9.pdf) starting on page 50.
 
 Additionally, the Lock()/Unlock() functions don't behave exactly like a traditional mutex to the local process.  If another thread tries to call the already locked distributed mutex, dmuex will return an error rather than block.  This allows more control for the calling code (i.e. retry, do something else and try again later, etc)
 
