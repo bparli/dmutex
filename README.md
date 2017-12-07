@@ -25,16 +25,15 @@ func dLockTest() {
 
   if err := d.Lock(); err != nil {
 				log.Errorln("Lock error", err)
-			} else {
-				log.Debugln("Acquired Lock")
-				time.Sleep(time.Duration(100) * time.Millisecond)
-				if err := d.UnLock(); err != nil {
-					log.Errorln("Unlock Error", err)
-				} else {
-					log.Debugln("Released Lock")
-				}
-			}
-
+	} else {
+		log.Debugln("Acquired Lock")
+		time.Sleep(time.Duration(100) * time.Millisecond)
+		if err := d.UnLock(); err != nil {
+			log.Errorln("Unlock Error", err)
+		} else {
+			log.Debugln("Released Lock")
+		}
+	}
 }
 ```
 
