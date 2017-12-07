@@ -28,7 +28,7 @@ type Dmutex struct {
 }
 
 func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex {
-	log.SetLevel(log.DebugLevel)
+	//log.SetLevel(log.DebugLevel)
 
 	var nodeIPs []string
 	for _, node := range nodes {
