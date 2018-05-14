@@ -1,0 +1,41 @@
+
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "io.grpc.dmutex.dsync";
+option java_outer_classname = "DsyncProto";
+import "google/protobuf/timestamp.proto";
+
+package dsync;
+
+// The Distributed Lock service
+service DistSync {
+  // Request for Distributed Lock
+  rpc Request (LockReq) returns (Node) {}
+
+  // Request for Distributed Lock
+  rpc Reply (Node)  returns (Node) {}
+
+  // Relinquish Distributed Lock
+  rpc Relinquish (Node) returns (Node) {}
+
+  // Inquire on status of Distributed Lock from head of queue
+  rpc Inquire (Node) returns (InquireReply) {}
+}
+
+// Request the distributed lock
+message LockReq {
+  string node = 1;
+  google.protobuf.Timestamp tstmp = 2;
+}
+
+// for Reply, Inquire, and Relinquish messages
+message Node {
+  string node = 1;
+}
+
+// Response to an Inquire message.  May either yield or relinquish
+message InquireReply {
+  bool yield = 1;
+  bool relinquish = 2;
+}
