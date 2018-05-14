@@ -1,25 +1,28 @@
 package server
 
 import (
-	"net/rpc"
+	"context"
 	"sync"
 	"testing"
 	"time"
 
+	pb "github.com/bparli/dmutex/dsync"
 	"github.com/bparli/dmutex/queue"
+	"github.com/golang/protobuf/ptypes"
 	. "github.com/smartystreets/goconvey/convey"
+	"google.golang.org/grpc"
 )
 
 // use same RPC server for all tests in dmutex package.
 var (
-	testServer *RPCServer
+	testServer *DistSyncServer
 	started    bool
 )
 
 func setupTestRPC() {
 	var err error
 	if !started || testServer == nil {
-		testServer, err = NewRPCServer("127.0.0.1", 10, 10*time.Second)
+		testServer, err = NewDistSyncServer("127.0.0.1", 10, 10*time.Second)
 		if err != nil {
 			return
 		}
@@ -34,34 +37,40 @@ func Test_BasicServer(t *testing.T) {
 		setupTestRPC()
 		testServer.SetReady(true)
 
-		t := time.Now()
 		args := &queue.Mssg{
-			Timestamp: t,
-			Node:      "127.0.0.1",
-			Replied:   false,
+			Node:    "127.0.0.1",
+			Replied: false,
 		}
 
-		var reply int
-		client, err := rpc.DialHTTP("tcp", "127.0.0.1:7070")
-		defer client.Close()
+		var opts []grpc.DialOption
+		opts = append(opts, grpc.WithInsecure())
+		conn, _ := grpc.Dial("127.0.0.1:7070", opts...)
+
+		defer conn.Close()
+		client := pb.NewDistSyncClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		reply, err := client.Request(ctx, &pb.LockReq{Node: "127.0.0.1", Tstmp: ptypes.TimestampNow()})
 
 		So(err, ShouldBeNil)
-
-		err = client.Call("Dsync.Request", args, &reply)
-
-		So(err, ShouldBeNil)
-		So(reply, ShouldEqual, 0)
+		So(reply, ShouldHaveSameTypeAs, &pb.Node{})
 
 		peers := make(map[string]bool)
 		peers["127.0.0.1"] = true
 		errReply := testServer.GatherReplies(args, peers, 1)
-		err = client.Call("Dsync.Reply", args, &reply)
+
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		reply, err = client.Reply(ctx, &pb.Node{Node: "127.0.0.1"})
 		So(err, ShouldBeNil)
-		So(errReply, ShouldBeNil)
+		So(reply, ShouldNotBeNil)
 
 		peers["127.0.0.1"] = false
 		errReply = testServer.GatherReplies(args, peers, 1)
-		err = client.Call("Dsync.Reply", args, &reply)
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err = client.Reply(ctx, &pb.Node{Node: "127.0.0.1"})
 		So(err, ShouldBeNil)
 		So(errReply, ShouldNotBeNil)
 
@@ -70,7 +79,7 @@ func Test_BasicServer(t *testing.T) {
 
 func Test_Inquire(t *testing.T) {
 	Convey("Test Inquire", t, func() {
-		d := &Dsync{
+		d := &DistSyncServer{
 			reqQueue:  nil,
 			qMutex:    &sync.RWMutex{},
 			progMutex: &sync.RWMutex{},
@@ -80,18 +89,16 @@ func Test_Inquire(t *testing.T) {
 		}
 
 		testServer.SetProgress(ProgressNotAcquired)
-		reply, err := d.sendInquire("127.0.0.1")
+		err := d.sendInquire("127.0.0.1")
 		So(err, ShouldBeNil)
-		So(reply, ShouldEqual, YieldMssg)
 
 		testServer.SetProgress(ProgressAcquired)
 		go func() {
 			time.Sleep(1 * time.Second)
 			testServer.SetProgress(ProgressNotAcquired)
 		}()
-		reply, err = d.sendInquire("127.0.0.1")
+		err = d.sendInquire("127.0.0.1")
 		So(err, ShouldBeNil)
-		So(reply, ShouldEqual, RelinqMssg)
 
 	})
 }
@@ -99,35 +106,36 @@ func Test_Inquire(t *testing.T) {
 func Test_Relinquish(t *testing.T) {
 	Convey("Test Relinquish", t, func() {
 		args := &queue.Mssg{
-			Timestamp: time.Now(),
-			Node:      "127.0.0.1",
-			Replied:   false,
+			Node:    "127.0.0.1",
+			Replied: false,
 		}
-		testServer.dsync.push(args)
+		testServer.push(args)
 
-		var reply int
+		var opts []grpc.DialOption
+		opts = append(opts, grpc.WithInsecure())
+		conn, _ := grpc.Dial("127.0.0.1:7070", opts...)
+		defer conn.Close()
+		client := pb.NewDistSyncClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-		client, err := rpc.DialHTTP("tcp", "127.0.0.1:7070")
-		defer client.Close()
-
-		So(err, ShouldBeNil)
-
-		err = client.Call("Dsync.Relinquish", args, &reply)
+		_, err := client.Relinquish(ctx, &pb.Node{Node: "127.0.0.1"})
 		So(err, ShouldBeNil)
 
 		argsB := &queue.Mssg{
-			Timestamp: time.Now().AddDate(0, 0, 1),
-			Node:      "127.0.0.33",
-			Replied:   false,
+			Node:    "127.0.0.33",
+			Replied: false,
 		}
-		testServer.dsync.push(argsB)
+		testServer.push(argsB)
 
-		err = client.Call("Dsync.Relinquish", argsB, &reply)
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err = client.Relinquish(ctx, &pb.Node{Node: "127.0.0.1"})
 		So(err, ShouldBeNil)
 
-		testServer.dsync.pop()
+		testServer.pop()
 
-		So(testServer.dsync.reqQueue.Len(), ShouldEqual, 0)
+		So(testServer.reqQueue.Len(), ShouldEqual, 0)
 	})
 }
 
@@ -138,13 +146,13 @@ func Test_Sanitize(t *testing.T) {
 			Node:      "127.0.0.1",
 			Replied:   false,
 		}
-		testServer.dsync.push(args)
+		testServer.push(args)
 
-		check := (*testServer.dsync.reqQueue)[0]
-		So(testServer.dsync.reqQueue.Len(), ShouldEqual, 1)
+		check := (*testServer.reqQueue)[0]
+		So(testServer.reqQueue.Len(), ShouldEqual, 1)
 		So(check.Timestamp, ShouldEqual, args.Timestamp)
 
 		testServer.SanitizeQueue()
-		So(testServer.dsync.reqQueue.Len(), ShouldEqual, 0)
+		So(testServer.reqQueue.Len(), ShouldEqual, 0)
 	})
 }

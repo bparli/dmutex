@@ -14,14 +14,14 @@ import (
 )
 
 var (
-	testServer *server.RPCServer
+	testServer *server.DistSyncServer
 	started    bool
 )
 
 func setupTestRPC() {
 	var err error
 	if !started || testServer == nil {
-		testServer, err = server.NewRPCServer("127.0.0.1", 10, 10*time.Second)
+		testServer, err = server.NewDistSyncServer("127.0.0.1", 10, 10*time.Second)
 		if err != nil {
 			return
 		}

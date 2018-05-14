@@ -2,41 +2,43 @@ package server
 
 import (
 	"container/heap"
+	"context"
 	"errors"
+	"fmt"
 	"net"
-	"net/http"
-	"net/rpc"
 	"sync"
 	"time"
 
+	pb "github.com/bparli/dmutex/dsync"
 	"github.com/bparli/dmutex/queue"
+	"github.com/golang/protobuf/ptypes"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 const (
-	YieldMssg           int = 1
-	RelinqMssg          int = 2
 	ProgressNotAcquired int = 0
 	ProgressAcquired    int = 1
 	ProgressYielded     int = 2
 )
 
 var (
-	rpcSrv       *RPCServer
+	rpcSrv       *DistSyncServer
 	totalMembers int
 	Timeout      time.Duration
 	RPCPort      = "7070"
+	ready        *Ready
 )
 
-// Dsync manages RPC server and request queue
-type Dsync struct {
+// DistSyncServer manages RPC server and request queue
+type DistSyncServer struct {
 	localAddr   string
 	reqQueue    *queue.ReqHeap
 	qMutex      *sync.RWMutex
 	progMutex   *sync.RWMutex
 	ReqProgress int
-	reqsCh      chan *queue.Mssg
-	repliesCh   chan *queue.Mssg
+	reqsCh      chan *pb.LockReq
+	repliesCh   chan *pb.Node
 }
 
 type Ready struct {
@@ -44,25 +46,18 @@ type Ready struct {
 	Mutex *sync.RWMutex
 }
 
-type RPCServer struct {
-	dsync *Dsync
-	srv   *rpc.Server
-	lis   net.Listener
-	Ready *Ready
-}
-
-func (d *Dsync) processQueue() {
+func (r *DistSyncServer) processQueue() {
 	var min *queue.Mssg
-	d.qMutex.Lock()
-	defer d.qMutex.Unlock()
+	r.qMutex.Lock()
+	defer r.qMutex.Unlock()
 
-	if d.reqQueue.Len() > 0 {
-		min = (*d.reqQueue)[0]
+	if r.reqQueue.Len() > 0 {
+		min = (*r.reqQueue)[0]
 	} else {
 		return
 	}
 	if !min.Replied {
-		if err := d.sendReply(min); err != nil {
+		if err := r.sendReply(min); err != nil {
 			log.Errorln("Error sending reply to node", min.Node, err)
 		} else {
 			min.Replied = true
@@ -70,33 +65,45 @@ func (d *Dsync) processQueue() {
 	}
 }
 
-func (d *Dsync) serveRequests() {
+func (r *DistSyncServer) serveRequests() {
 	for {
-		req := <-d.reqsCh
-		min := d.readMin()
+		req := <-r.reqsCh
+		min := r.readMin()
 
 		// there should only be one outstanding request in queue from a given node
 		PurgeNodeFromQueue(req.Node)
 
-		if min != nil && min.Timestamp.After(req.Timestamp) {
-			_, err := d.sendInquire(min.Node)
+		timeStamp, err := ptypes.Timestamp(req.Tstmp)
+		if err != nil {
+			log.Errorln("Error converting request timestamp.  Skipping request " + req.Node)
+			continue
+		}
+		queueMessage := &queue.Mssg{
+			Timestamp: timeStamp,
+			Node:      req.Node,
+			Replied:   false,
+		}
+
+		if min != nil && min.Timestamp.After(timeStamp) {
+			err := r.sendInquire(min.Node)
 			if err != nil {
 				log.Errorln("Error sending Inquire", err)
 			}
 		}
 		rpcSrv.SanitizeQueue()
-		d.push(req)
-		d.processQueue()
+		r.push(queueMessage)
+		r.processQueue()
 	}
 }
 
-func (d *Dsync) Reply(args *queue.Mssg, reply *int) error {
-	log.Debugln("Incoming Reply from", args)
-	d.repliesCh <- args
-	return nil
+func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, error) {
+	node := &pb.Node{Node: r.localAddr}
+	log.Debugln("Incoming Reply from", reply.Node)
+	r.repliesCh <- reply
+	return node, nil
 }
 
-func (r *RPCServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool, numMembers int) error {
+func (r *DistSyncServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool, numMembers int) error {
 	log.Debugln("Gathering Replies, waiting on ", peers, reqArgs)
 
 	startTime := time.Now()
@@ -105,9 +112,9 @@ func (r *RPCServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool, nu
 outer:
 	for {
 		select {
-		case reply := <-r.dsync.repliesCh:
+		case <-r.repliesCh:
 			res, ok := peers[reqArgs.Node]
-			if reply.Timestamp.Equal(reqArgs.Timestamp) && ok && res {
+			if ok && res {
 				count++
 			}
 			if count >= len(peers) {
@@ -116,41 +123,35 @@ outer:
 		default:
 			if startTime.Add(time.Duration(numMembers) * Timeout).Before(time.Now()) {
 				return errors.New("Gathering replies timed out")
-			} else {
-				// be sure not to cpu starve other threads
-				time.Sleep(100 * time.Millisecond)
 			}
+			// be sure not to cpu starve other threads
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	return nil
 }
 
-func (d *Dsync) sendReply(reqArgs *queue.Mssg) error {
+func (r *DistSyncServer) sendReply(reqArgs *queue.Mssg) error {
 	// send reply to head of queue
 	log.Debugln("Sending Reply to", reqArgs)
-	var reply int
-	args := &queue.Mssg{
-		Timestamp: reqArgs.Timestamp,
-		Node:      d.localAddr,
-		Replied:   false,
-	}
-	client, err := rpc.DialHTTP("tcp", reqArgs.Node+":"+RPCPort)
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithInsecure())
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", reqArgs.Node, RPCPort), opts...)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-
-	c := make(chan error, 1)
-	go func() { c <- client.Call("Dsync.Reply", args, &reply) }()
-	select {
-	case err := <-c:
+	defer conn.Close()
+	client := pb.NewDistSyncClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	_, err = client.Reply(ctx, &pb.Node{Node: r.localAddr})
+	if err != nil {
 		return err
-	case <-time.After(Timeout):
-		return errors.New("Reply rpc timed out to node" + reqArgs.Node)
 	}
+	return nil
 }
 
-func (d *Dsync) Request(args *queue.Mssg, reply *int) error {
+func (r *DistSyncServer) Request(ctx context.Context, req *pb.LockReq) (*pb.Node, error) {
 	for {
 		if !rpcSrv.CheckReady() {
 			// be sure not to cpu starve memberlist threads
@@ -161,130 +162,131 @@ func (d *Dsync) Request(args *queue.Mssg, reply *int) error {
 		}
 	}
 
-	if args.Timestamp.Add(Timeout).Before(time.Now()) {
-		return errors.New("Request has already timed out")
+	if timeStamp, err := ptypes.Timestamp(req.Tstmp); err != nil {
+		return nil, errors.New("Error converting request timestamp")
+	} else if timeStamp.Add(Timeout).Before(time.Now()) {
+		return nil, errors.New("Request has already timed out")
 	}
 
-	log.Debugln("Incoming Request from", args)
-	d.reqsCh <- args
+	log.Debugln("Incoming Request from", req.Node)
+	r.reqsCh <- req
+	return &pb.Node{Node: r.localAddr}, nil
+}
+
+func (r *DistSyncServer) sendInquire(node string) error {
+	log.Debugln("Sending Inquire to", node)
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithInsecure())
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", node, RPCPort), opts...)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	client := pb.NewDistSyncClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	_, err = client.Inquire(ctx, &pb.Node{Node: r.localAddr})
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-func (d *Dsync) sendInquire(node string) (int, error) {
-	log.Debugln("Sending Inquire to", node)
-	var reply int
-	client, err := rpc.DialHTTP("tcp", node+":"+RPCPort)
-	if err != nil {
-		return 0, err
+func (r *DistSyncServer) Inquire(ctx context.Context, req *pb.Node) (*pb.InquireReply, error) {
+	reply := &pb.InquireReply{
+		Yield:      false,
+		Relinquish: false,
 	}
-	defer client.Close()
-
-	args := &queue.Mssg{
-		Node: d.localAddr,
-	}
-
-	c := make(chan error, 1)
-	go func() { c <- client.Call("Dsync.Inquire", args, &reply) }()
-	select {
-	case err := <-c:
-		return reply, err
-	case <-time.After(Timeout):
-		return 0, errors.New("Inquire rpc timed out to node" + node)
-	}
-}
-
-func (d *Dsync) Inquire(args *queue.Mssg, reply *int) error {
 	if rpcSrv.checkProgress() == ProgressAcquired {
 		log.Debugln("Lock already acquired, block on Inquire")
 		// block until the lock is ready to be released
 		for {
 			if rpcSrv.checkProgress() != ProgressAcquired {
-				*reply = RelinqMssg
+				reply.Relinquish = true
 				break
 			}
 		}
 	} else {
 		log.Debugln("Progress Not Acquired, Yield")
-		*reply = YieldMssg
+		reply.Yield = true
 	}
-	return nil
+	return reply, nil
 }
 
-func (r *RPCServer) checkProgress() int {
-	r.dsync.progMutex.RLock()
-	defer r.dsync.progMutex.RUnlock()
-	return r.dsync.ReqProgress
+func (r *DistSyncServer) checkProgress() int {
+	r.progMutex.RLock()
+	defer r.progMutex.RUnlock()
+	return r.ReqProgress
 }
 
-func (r *RPCServer) SetProgress(setting int) {
-	r.dsync.progMutex.Lock()
-	defer r.dsync.progMutex.Unlock()
-	r.dsync.ReqProgress = setting
+func (r *DistSyncServer) SetProgress(setting int) {
+	r.progMutex.Lock()
+	defer r.progMutex.Unlock()
+	r.ReqProgress = setting
 }
 
-func (r *RPCServer) CheckReady() bool {
-	r.Ready.Mutex.RLock()
-	defer r.Ready.Mutex.RUnlock()
-	return r.Ready.Flag
+func (r *DistSyncServer) CheckReady() bool {
+	ready.Mutex.RLock()
+	defer ready.Mutex.RUnlock()
+	return ready.Flag
 }
 
-func (r *RPCServer) SetReady(ready bool) {
-	r.Ready.Mutex.Lock()
-	defer r.Ready.Mutex.Unlock()
-	r.Ready.Flag = ready
+func (r *DistSyncServer) SetReady(setting bool) {
+	ready.Mutex.Lock()
+	defer ready.Mutex.Unlock()
+	ready.Flag = setting
 }
 
-func (d *Dsync) Relinquish(args *queue.Mssg, reply *int) error {
-	log.Debugln("Received relinquish", args)
-	item := d.readMin()
+func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*pb.Node, error) {
+	node := &pb.Node{Node: r.localAddr}
+	log.Debugln("Received relinquish", relinquish.Node)
+	item := r.readMin()
 	if item == nil {
 		log.Errorln("Error with Relinquish.  Minimum item on queue is nil")
-		return nil // timeout may have occured while relinquish was in flight.  still want to log it though
+		return node, nil // timeout may have occured while relinquish was in flight.  still want to log it though
 	}
 	// search the rest of the queue for the right relinquish
 	// messages might have arrived out of order
-	if item.Node != args.Node {
-		d.qMutex.RLock()
-		qlen := d.reqQueue.Len()
+	if item.Node != relinquish.Node {
+		r.qMutex.RLock()
+		qlen := r.reqQueue.Len()
 		if qlen >= 2 {
 			for i := 1; i < qlen; i++ {
-				if (*d.reqQueue)[i].Node == args.Node {
-					d.qMutex.RUnlock()
-					d.remove(i)
-					d.processQueue()
-					return nil
+				if (*r.reqQueue)[i].Node == relinquish.Node {
+					r.qMutex.RUnlock()
+					r.remove(i)
+					r.processQueue()
+					return node, nil
 				}
 			}
-			d.qMutex.RUnlock()
-			return errors.New("Error with Relinquish.  Minimum item from node not found")
+			r.qMutex.RUnlock()
+			return nil, errors.New("Error with Relinquish.  Minimum item from node not found")
 		}
 	}
-	d.pop()
-	d.processQueue()
-	return nil
+	r.pop()
+	r.processQueue()
+	return node, nil
 }
 
-func NewRPCServer(addr string, numMembers int, timeout time.Duration) (*RPCServer, error) {
+func NewDistSyncServer(addr string, numMembers int, timeout time.Duration) (*DistSyncServer, error) {
 	reqQueue := &queue.ReqHeap{}
 	heap.Init(reqQueue)
 
-	srv := rpc.NewServer()
-
 	// set channel buffers to be very high for recovery scenarios
-	reqsCh := make(chan *queue.Mssg, numMembers)
-	repliesCh := make(chan *queue.Mssg, numMembers)
+	reqsCh := make(chan *pb.LockReq, numMembers)
+	repliesCh := make(chan *pb.Node, numMembers)
 	totalMembers = numMembers
 
 	// This timeout is the timeout for all RPC calls, some of which are intentially blocking
 	// if another process is holding the distributed mutex
 	Timeout = timeout
 
-	ready := &Ready{
+	ready = &Ready{
 		Mutex: &sync.RWMutex{},
 		Flag:  false,
 	}
 
-	dsync := &Dsync{
+	rpcSrv = &DistSyncServer{
 		reqQueue:  reqQueue,
 		qMutex:    &sync.RWMutex{},
 		progMutex: &sync.RWMutex{},
@@ -293,31 +295,25 @@ func NewRPCServer(addr string, numMembers int, timeout time.Duration) (*RPCServe
 		repliesCh: repliesCh,
 	}
 
-	srv.Register(dsync)
-	srv.HandleHTTP("/", "/debug")
-
 	lis, err := net.Listen("tcp", addr+":"+RPCPort)
 	if err != nil {
 		return nil, errors.New("Unable to initialize RPC server: " + err.Error())
 	}
 
-	go http.Serve(lis, nil)
-	go dsync.serveRequests()
+	var opts []grpc.ServerOption
+	DistSyncServer := grpc.NewServer(opts...)
+	pb.RegisterDistSyncServer(DistSyncServer, rpcSrv)
+	go DistSyncServer.Serve(lis)
+	go rpcSrv.serveRequests()
 
-	rpcSrv = &RPCServer{
-		dsync: dsync,
-		srv:   srv,
-		lis:   lis,
-		Ready: ready,
-	}
 	return rpcSrv, nil
 }
 
-func (d *Dsync) pop() {
+func (d *DistSyncServer) pop() {
 	d.remove(0)
 }
 
-func (d *Dsync) remove(index int) {
+func (d *DistSyncServer) remove(index int) {
 	d.qMutex.Lock()
 	defer d.qMutex.Unlock()
 	if d.reqQueue.Len() >= index+1 {
@@ -325,13 +321,13 @@ func (d *Dsync) remove(index int) {
 	}
 }
 
-func (d *Dsync) push(args *queue.Mssg) {
+func (d *DistSyncServer) push(args *queue.Mssg) {
 	d.qMutex.Lock()
 	defer d.qMutex.Unlock()
 	heap.Push(d.reqQueue, args)
 }
 
-func (d *Dsync) readMin() *queue.Mssg {
+func (d *DistSyncServer) readMin() *queue.Mssg {
 	d.qMutex.RLock()
 	defer d.qMutex.RUnlock()
 	if d.reqQueue.Len() > 0 {
@@ -342,32 +338,32 @@ func (d *Dsync) readMin() *queue.Mssg {
 }
 
 func PurgeNodeFromQueue(node string) {
-	rpcSrv.dsync.qMutex.Lock()
-	defer rpcSrv.dsync.qMutex.Unlock()
+	rpcSrv.qMutex.Lock()
+	defer rpcSrv.qMutex.Unlock()
 	purge(node)
 }
 
 func purge(node string) {
-	for i := 0; i < rpcSrv.dsync.reqQueue.Len(); i++ {
-		if (*rpcSrv.dsync.reqQueue)[i].Node == node {
-			heap.Remove(rpcSrv.dsync.reqQueue, i)
+	for i := 0; i < rpcSrv.reqQueue.Len(); i++ {
+		if (*rpcSrv.reqQueue)[i].Node == node {
+			heap.Remove(rpcSrv.reqQueue, i)
 		}
 	}
 }
 
-func (r *RPCServer) SanitizeQueue() {
-	r.dsync.qMutex.Lock()
-	defer r.dsync.qMutex.Unlock()
+func (r *DistSyncServer) SanitizeQueue() {
+	r.qMutex.Lock()
+	defer r.qMutex.Unlock()
 
-	for i := 0; i < r.dsync.reqQueue.Len(); i++ {
-		check := (*r.dsync.reqQueue)[i]
+	for i := 0; i < r.reqQueue.Len(); i++ {
+		check := (*r.reqQueue)[i]
 		if check.Timestamp.Add(2 * Timeout).Before(time.Now()) {
-			heap.Remove(r.dsync.reqQueue, i)
+			heap.Remove(r.reqQueue, i)
 			log.Errorln("Removed timeout from queue at time", time.Now(), check)
 		}
 	}
 }
 
-func (r *RPCServer) TriggerQueueProcess() {
-	r.dsync.processQueue()
+func (r *DistSyncServer) TriggerQueueProcess() {
+	r.processQueue()
 }

@@ -1,17 +1,21 @@
 package dmutex
 
 import (
+	"context"
 	"errors"
-	"net/rpc"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bparli/dmutex/bintree"
+	pb "github.com/bparli/dmutex/dsync"
 	"github.com/bparli/dmutex/queue"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
+	"github.com/golang/protobuf/ptypes"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -21,14 +25,14 @@ var (
 
 type Dmutex struct {
 	Quorums      *quorums.QState
-	rpcServer    *server.RPCServer
+	rpcServer    *server.DistSyncServer
 	gateway      *sync.Mutex
 	localRequest *queue.Mssg
 	set          bool
 }
 
 func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex {
-	//log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.DebugLevel)
 
 	var nodeIPs []string
 	for _, node := range nodes {
@@ -47,7 +51,7 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 
 	dmutex = &Dmutex{
 		Quorums:      qms,
-		rpcServer:    &server.RPCServer{},
+		rpcServer:    &server.DistSyncServer{},
 		localRequest: &queue.Mssg{},
 		gateway:      &sync.Mutex{},
 		set:          false,
@@ -58,7 +62,7 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 		log.Errorln("Error initializing memberlist", err.Error())
 	}
 
-	dmutex.rpcServer, err = server.NewRPCServer(localAddr, len(nodes), timeout)
+	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -90,34 +94,51 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 }
 
 func sendRequest(args *queue.Mssg, peer string, wg *sync.WaitGroup, ch chan<- error) {
-	defer wg.Done()
 	log.Debugln("sending Request for lock to", peer, args)
-	_, err := sendToPeer("Dsync.Request", args, peer)
+	defer wg.Done()
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithInsecure())
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
+	if err != nil {
+		log.Errorln("Error dialing peer:", err)
+		ch <- err
+		return
+	}
+	defer conn.Close()
+	client := pb.NewDistSyncClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), server.Timeout)
+	defer cancel()
+
+	reply, err := client.Request(ctx, &pb.LockReq{Node: nodeAddr, Tstmp: ptypes.TimestampNow()})
 	ch <- err
+	if err != nil {
+		log.Errorln("Error requesting:", err)
+	} else {
+		log.Debugln("Reply from:", reply)
+	}
 }
 
 func sendRelinquish(args *queue.Mssg, peer string, wg *sync.WaitGroup, ch chan<- error) {
-	defer wg.Done()
 	log.Debugln("sending Relinquish lock to", peer, args)
-	_, err := sendToPeer("Dsync.Relinquish", args, peer)
-	ch <- err
-}
-
-func sendToPeer(method string, args *queue.Mssg, peer string) (int, error) {
-	var reply int
-	client, err := rpc.DialHTTP("tcp", peer+":"+server.RPCPort)
+	defer wg.Done()
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithInsecure())
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
 	if err != nil {
-		return 0, err
+		log.Errorln("Error dialing peer:", err)
+		ch <- err
+		return
 	}
-	defer client.Close()
-
-	c := make(chan error, 1)
-	go func() { c <- client.Call(method, args, &reply) }()
-	select {
-	case err := <-c:
-		return reply, err
-	case <-time.After(server.Timeout):
-		return 0, errors.New(method + "rpc timed out to node" + peer)
+	defer conn.Close()
+	client := pb.NewDistSyncClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), server.Timeout)
+	defer cancel()
+	reply, err := client.Relinquish(ctx, &pb.Node{Node: nodeAddr})
+	ch <- err
+	if err != nil {
+		log.Errorln("Error relinquishing:", err)
+	} else {
+		log.Debugln("Reply from:", reply)
 	}
 }
 
@@ -135,13 +156,11 @@ func (d *Dmutex) Lock() error {
 		ch := make(chan error, len(d.Quorums.CurrMembers))
 		var wg sync.WaitGroup
 		args := &queue.Mssg{
-			Timestamp: time.Now(),
-			Node:      nodeAddr,
-			Replied:   false,
+			Node:    nodeAddr,
+			Replied: false,
 		}
 
 		d.localRequest = args
-
 		d.rpcServer.SetProgress(server.ProgressNotAcquired)
 
 		for peer := range d.Quorums.CurrPeers {
@@ -150,11 +169,12 @@ func (d *Dmutex) Lock() error {
 				go sendRequest(args, peer, &wg, ch)
 			}
 		}
-		wg.Wait()
 
+		wg.Wait()
 		err := d.checkForError(ch)
 		close(ch)
 		if err != nil {
+			log.Errorln("Error with lock:", err)
 			d.recover()
 			return err
 		}
