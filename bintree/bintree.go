@@ -90,16 +90,17 @@ func (t *Tree) findNode(ipAddr string, n *node, ch chan<- *node) {
 
 func (t *Tree) getNodePaths(r *node, n *node, path []string) {
 	if n.left == nil && n.right == nil {
-		path = append(path, n.val)
-		r.Paths = append(r.Paths, path)
+		finalPath := append(path, n.val)
+		r.Paths = append(r.Paths, finalPath)
 		return
 	}
-	path = append(path, n.val)
 	if n.right != nil {
-		t.getNodePaths(r, n.right, path)
+		rightPath := append(path, n.val)
+		t.getNodePaths(r, n.right, rightPath)
 	}
 	if n.left != nil {
-		t.getNodePaths(r, n.left, path)
+		leftPath := append(path, n.val)
+		t.getNodePaths(r, n.left, leftPath)
 	}
 }
 
