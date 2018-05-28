@@ -23,12 +23,18 @@ const (
 )
 
 var (
-	rpcSrv       *DistSyncServer
-	totalMembers int
-	Timeout      time.Duration
-	RPCPort      = "7070"
-	ready        *Ready
+	rpcSrv *DistSyncServer
+
+	// Timeout for acquiring enough replies
+	Timeout time.Duration
+	RPCPort = "7070"
+	replies *peerReplies
 )
+
+type peerReplies struct {
+	currPeers map[string]bool
+	mutex     *sync.Mutex
+}
 
 // DistSyncServer manages RPC server and request queue
 type DistSyncServer struct {
@@ -39,11 +45,6 @@ type DistSyncServer struct {
 	ReqProgress int
 	reqsCh      chan *pb.LockReq
 	repliesCh   chan *pb.Node
-}
-
-type Ready struct {
-	Flag  bool
-	Mutex *sync.RWMutex
 }
 
 func (r *DistSyncServer) processQueue() {
@@ -103,31 +104,39 @@ func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, e
 	return node, nil
 }
 
-func (r *DistSyncServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool, numMembers int) error {
+func (r *DistSyncServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool) error {
 	log.Debugln("Gathering Replies, waiting on ", peers, reqArgs)
-
+	replies = &peerReplies{
+		mutex:     &sync.Mutex{},
+		currPeers: peers,
+	}
 	startTime := time.Now()
-	count := 0
 
 outer:
 	for {
 		select {
 		case <-r.repliesCh:
-			res, ok := peers[reqArgs.Node]
-			if ok && res {
-				count++
-			}
-			if count >= len(peers) {
+			if _, ok := replies.currPeers[reqArgs.Node]; ok {
+				replies.mutex.Lock()
+				// set node to true since we've received a Reply
+				replies.currPeers[reqArgs.Node] = true
+				// Check the rest of the nodes.  if we don't have all the Replies, continue
+				for _, node := range replies.currPeers {
+					if !node {
+						replies.mutex.Unlock()
+						continue outer
+					}
+				}
+				replies.mutex.Unlock()
 				break outer
 			}
 		default:
-			if startTime.Add(time.Duration(numMembers) * Timeout).Before(time.Now()) {
+			if startTime.Add(time.Duration(len(peers)) * Timeout).Before(time.Now()) {
 				return errors.New("Gathering replies timed out")
 			}
-			// be sure not to cpu starve other threads
-			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	rpcSrv.SetProgress(ProgressAcquired)
 	return nil
 }
 
@@ -152,16 +161,6 @@ func (r *DistSyncServer) sendReply(reqArgs *queue.Mssg) error {
 }
 
 func (r *DistSyncServer) Request(ctx context.Context, req *pb.LockReq) (*pb.Node, error) {
-	for {
-		if !rpcSrv.CheckReady() {
-			// be sure not to cpu starve memberlist threads
-			time.Sleep(time.Duration(100*totalMembers) * time.Millisecond)
-			continue
-		} else {
-			break
-		}
-	}
-
 	if timeStamp, err := ptypes.Timestamp(req.Tstmp); err != nil {
 		return nil, errors.New("Error converting request timestamp")
 	} else if timeStamp.Add(Timeout).Before(time.Now()) {
@@ -192,7 +191,7 @@ func (r *DistSyncServer) sendInquire(node string) error {
 	return nil
 }
 
-func (r *DistSyncServer) Inquire(ctx context.Context, req *pb.Node) (*pb.InquireReply, error) {
+func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.InquireReply, error) {
 	reply := &pb.InquireReply{
 		Yield:      false,
 		Relinquish: false,
@@ -208,6 +207,9 @@ func (r *DistSyncServer) Inquire(ctx context.Context, req *pb.Node) (*pb.Inquire
 		}
 	} else {
 		log.Debugln("Progress Not Acquired, Yield")
+		replies.mutex.Lock()
+		replies.currPeers[inq.String()] = false
+		replies.mutex.Unlock()
 		reply.Yield = true
 	}
 	return reply, nil
@@ -223,18 +225,6 @@ func (r *DistSyncServer) SetProgress(setting int) {
 	r.progMutex.Lock()
 	defer r.progMutex.Unlock()
 	r.ReqProgress = setting
-}
-
-func (r *DistSyncServer) CheckReady() bool {
-	ready.Mutex.RLock()
-	defer ready.Mutex.RUnlock()
-	return ready.Flag
-}
-
-func (r *DistSyncServer) SetReady(setting bool) {
-	ready.Mutex.Lock()
-	defer ready.Mutex.Unlock()
-	ready.Flag = setting
 }
 
 func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*pb.Node, error) {
@@ -275,16 +265,10 @@ func NewDistSyncServer(addr string, numMembers int, timeout time.Duration) (*Dis
 	// set channel buffers to be very high for recovery scenarios
 	reqsCh := make(chan *pb.LockReq, numMembers)
 	repliesCh := make(chan *pb.Node, numMembers)
-	totalMembers = numMembers
 
 	// This timeout is the timeout for all RPC calls, some of which are intentially blocking
 	// if another process is holding the distributed mutex
 	Timeout = timeout
-
-	ready = &Ready{
-		Mutex: &sync.RWMutex{},
-		Flag:  false,
-	}
 
 	rpcSrv = &DistSyncServer{
 		reqQueue:  reqQueue,

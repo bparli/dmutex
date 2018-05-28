@@ -28,14 +28,12 @@ func setupTestRPC() {
 		}
 	}
 	started = true
-	testServer.SetReady(true)
 }
 
 func Test_BasicServer(t *testing.T) {
 	Convey("Init server, Send request, and Gather Reply", t, func() {
 
 		setupTestRPC()
-		testServer.SetReady(true)
 
 		args := &queue.Mssg{
 			Node:    "127.0.0.1",
@@ -58,7 +56,7 @@ func Test_BasicServer(t *testing.T) {
 
 		peers := make(map[string]bool)
 		peers["127.0.0.1"] = true
-		errReply := testServer.GatherReplies(args, peers, 1)
+		errReply := testServer.GatherReplies(args, peers)
 
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -67,7 +65,7 @@ func Test_BasicServer(t *testing.T) {
 		So(reply, ShouldNotBeNil)
 
 		peers["127.0.0.1"] = false
-		errReply = testServer.GatherReplies(args, peers, 1)
+		errReply = testServer.GatherReplies(args, peers)
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, err = client.Reply(ctx, &pb.Node{Node: "127.0.0.1"})

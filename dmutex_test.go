@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bparli/dmutex/bintree"
-	"github.com/bparli/dmutex/queue"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
 
@@ -27,7 +26,6 @@ func setupTestRPC() {
 		}
 	}
 	started = true
-	testServer.SetReady(true)
 }
 
 func Test_Dmutex(t *testing.T) {
@@ -38,40 +36,21 @@ func Test_Dmutex(t *testing.T) {
 		nodes := []string{"127.0.0.1"}
 		t, _ := bintree.NewTree(nodes)
 		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
-		for _, member := range nodes {
-			dmutex.Quorums.CurrMembers[member] = true
-		}
-
-		err := dmutex.Quorums.BuildCurrQuorums()
-		So(err, ShouldBeNil)
-
-		mlist, err := InitMembersList("127.0.0.1:7946", nodes)
-
-		So(err, ShouldBeNil)
-		So(mlist.Members()[0].Addr.String(), ShouldEqual, "127.0.0.1")
 
 		setupTestRPC()
 		dmutex.rpcServer = testServer
 
-		dmutex.Quorums.Ready = true
-		dmutex.Quorums.Healthy = true
-
 		ch := make(chan error, 1)
 		var wg sync.WaitGroup
-		args := &queue.Mssg{
-			Timestamp: time.Now(),
-			Node:      "127.0.0.1",
-			Replied:   false,
-		}
 
 		wg.Add(1)
-		go sendRequest(args, "127.0.0.1", &wg, ch)
+		go sendRequest("127.0.0.1", &wg, ch)
 		wg.Wait()
 
-		err = dmutex.checkForError(ch)
+		err := dmutex.checkForError(ch)
 		So(err, ShouldBeNil)
 
-		dmutex.relinquish(args, ch)
+		dmutex.relinquish(ch)
 
 		err = dmutex.checkForError(ch)
 		So(err, ShouldBeNil)
