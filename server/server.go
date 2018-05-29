@@ -91,7 +91,6 @@ func (r *DistSyncServer) serveRequests() {
 				log.Errorln("Error sending Inquire", err)
 			}
 		}
-		rpcSrv.SanitizeQueue()
 		r.push(queueMessage)
 		r.processQueue()
 	}
@@ -104,8 +103,8 @@ func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, e
 	return node, nil
 }
 
-func (r *DistSyncServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]bool) error {
-	log.Debugln("Gathering Replies, waiting on ", peers, reqArgs)
+func (r *DistSyncServer) GatherReplies(peers map[string]bool) error {
+	log.Debugln("Gathering Replies, waiting on ", peers)
 	replies = &peerReplies{
 		mutex:     &sync.Mutex{},
 		currPeers: peers,
@@ -115,11 +114,11 @@ func (r *DistSyncServer) GatherReplies(reqArgs *queue.Mssg, peers map[string]boo
 outer:
 	for {
 		select {
-		case <-r.repliesCh:
-			if _, ok := replies.currPeers[reqArgs.Node]; ok {
+		case reply := <-r.repliesCh:
+			if _, ok := replies.currPeers[reply.Node]; ok {
 				replies.mutex.Lock()
 				// set node to true since we've received a Reply
-				replies.currPeers[reqArgs.Node] = true
+				replies.currPeers[reply.Node] = true
 				// Check the rest of the nodes.  if we don't have all the Replies, continue
 				for _, node := range replies.currPeers {
 					if !node {
@@ -208,7 +207,7 @@ func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.Inquire
 	} else {
 		log.Debugln("Progress Not Acquired, Yield")
 		replies.mutex.Lock()
-		replies.currPeers[inq.String()] = false
+		replies.currPeers[inq.Node] = false
 		replies.mutex.Unlock()
 		reply.Yield = true
 	}
@@ -331,19 +330,6 @@ func purge(node string) {
 	for i := 0; i < rpcSrv.reqQueue.Len(); i++ {
 		if (*rpcSrv.reqQueue)[i].Node == node {
 			heap.Remove(rpcSrv.reqQueue, i)
-		}
-	}
-}
-
-func (r *DistSyncServer) SanitizeQueue() {
-	r.qMutex.Lock()
-	defer r.qMutex.Unlock()
-
-	for i := 0; i < r.reqQueue.Len(); i++ {
-		check := (*r.reqQueue)[i]
-		if check.Timestamp.Add(2 * Timeout).Before(time.Now()) {
-			heap.Remove(r.reqQueue, i)
-			log.Errorln("Removed timeout from queue at time", time.Now(), check)
 		}
 	}
 }

@@ -20,7 +20,7 @@ var (
 func setupTestRPC() {
 	var err error
 	if !started || testServer == nil {
-		testServer, err = server.NewDistSyncServer("127.0.0.1", 10, 10*time.Second)
+		testServer, err = server.NewDistSyncServer("127.0.0.1", 1, 3*time.Second)
 		if err != nil {
 			return
 		}
@@ -31,30 +31,27 @@ func setupTestRPC() {
 func Test_Dmutex(t *testing.T) {
 	Convey("Test Send Request and Relinquish", t, func() {
 
-		dmutex = &Dmutex{}
+		peersMap := make(map[string]bool)
+		dmutex = &Dmutex{
+			currPeers: &peers{
+				peersMap: peersMap,
+				mutex:    &sync.RWMutex{},
+			},
+		}
 
 		nodes := []string{"127.0.0.1"}
 		t, _ := bintree.NewTree(nodes)
 		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
+		dmutex.currPeers.peersMap = dmutex.Quorums.Peers
 
 		setupTestRPC()
 		dmutex.rpcServer = testServer
 
-		ch := make(chan error, 1)
-		var wg sync.WaitGroup
-
-		wg.Add(1)
-		go sendRequest("127.0.0.1", &wg, ch)
-		wg.Wait()
-
-		err := dmutex.checkForError(ch)
+		err := dmutex.sendRequests(dmutex.Quorums.Peers)
 		So(err, ShouldBeNil)
 
+		ch := make(chan *lockError, 1)
 		dmutex.relinquish(ch)
-
-		err = dmutex.checkForError(ch)
-		So(err, ShouldBeNil)
-
 		close(ch)
 	})
 }

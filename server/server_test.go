@@ -35,11 +35,6 @@ func Test_BasicServer(t *testing.T) {
 
 		setupTestRPC()
 
-		args := &queue.Mssg{
-			Node:    "127.0.0.1",
-			Replied: false,
-		}
-
 		var opts []grpc.DialOption
 		opts = append(opts, grpc.WithInsecure())
 		conn, _ := grpc.Dial("127.0.0.1:7070", opts...)
@@ -56,7 +51,7 @@ func Test_BasicServer(t *testing.T) {
 
 		peers := make(map[string]bool)
 		peers["127.0.0.1"] = true
-		errReply := testServer.GatherReplies(args, peers)
+		errReply := testServer.GatherReplies(peers)
 
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -65,7 +60,7 @@ func Test_BasicServer(t *testing.T) {
 		So(reply, ShouldNotBeNil)
 
 		peers["127.0.0.1"] = false
-		errReply = testServer.GatherReplies(args, peers)
+		errReply = testServer.GatherReplies(peers)
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, err = client.Reply(ctx, &pb.Node{Node: "127.0.0.1"})
@@ -133,24 +128,6 @@ func Test_Relinquish(t *testing.T) {
 
 		testServer.pop()
 
-		So(testServer.reqQueue.Len(), ShouldEqual, 0)
-	})
-}
-
-func Test_Sanitize(t *testing.T) {
-	Convey("Test Sanitize Queue", t, func() {
-		args := &queue.Mssg{
-			Timestamp: time.Now().Add(-Timeout * 2),
-			Node:      "127.0.0.1",
-			Replied:   false,
-		}
-		testServer.push(args)
-
-		check := (*testServer.reqQueue)[0]
-		So(testServer.reqQueue.Len(), ShouldEqual, 1)
-		So(check.Timestamp, ShouldEqual, args.Timestamp)
-
-		testServer.SanitizeQueue()
 		So(testServer.reqQueue.Len(), ShouldEqual, 0)
 	})
 }
