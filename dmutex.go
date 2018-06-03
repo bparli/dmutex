@@ -1,41 +1,28 @@
 package dmutex
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bparli/dmutex/bintree"
-	pb "github.com/bparli/dmutex/dsync"
+	"github.com/bparli/dmutex/client"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
-	"github.com/golang/protobuf/ptypes"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
 )
 
 var (
-	dmutex    *Dmutex
-	localAddr string
+	dmutex       *Dmutex
+	localAddr    string
+	clientConfig *client.Config
 )
 
 type Dmutex struct {
 	Quorums   *quorums.Quorums
 	rpcServer *server.DistSyncServer
 	gateway   *sync.Mutex
-	currPeers *peers
-}
-
-type peers struct {
-	peersMap map[string]bool
-	mutex    *sync.RWMutex
-}
-
-type lockError struct {
-	node string
-	err  error
 }
 
 func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
@@ -55,85 +42,27 @@ func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
 	}
 
 	qms := quorums.NewQuorums(t, nodeIPs, localIP)
-	peersMap := make(map[string]bool)
-	fmt.Println(qms.Peers)
+	log.Debugln("Using Quorums: ", qms.MyQuorums)
+	log.Debugln("Using Peers: ", qms.Peers)
 
 	dmutex = &Dmutex{
 		Quorums:   qms,
 		rpcServer: &server.DistSyncServer{},
 		gateway:   &sync.Mutex{},
-		currPeers: &peers{
-			peersMap: peersMap,
-			mutex:    &sync.RWMutex{},
-		},
 	}
 
 	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout)
 	if err != nil {
 		log.Fatalln(err)
 	}
+
+	clientConfig = &client.Config{
+		LocalAddr:  localAddr,
+		RPCPort:    server.RPCPort,
+		RPCTimeout: timeout,
+	}
+
 	return dmutex
-}
-
-func sendRequest(peer string, ch chan<- *lockError, wg *sync.WaitGroup) {
-	log.Debugln("Sending Request for lock to", peer)
-	defer wg.Done()
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
-	if err != nil {
-		log.Errorln("Error dialing peer:", err)
-		ch <- &lockError{
-			node: peer,
-			err:  err,
-		}
-		return
-	}
-	defer conn.Close()
-	client := pb.NewDistSyncClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), server.Timeout)
-	defer cancel()
-
-	reply, err := client.Request(ctx, &pb.LockReq{Node: localAddr, Tstmp: ptypes.TimestampNow()})
-	ch <- &lockError{
-		node: peer,
-		err:  err,
-	}
-	if err != nil {
-		log.Errorln("Error requesting:", err)
-	} else {
-		log.Debugln("Acknowledgement from:", reply)
-	}
-}
-
-func sendRelinquish(peer string, wg *sync.WaitGroup, ch chan<- *lockError) {
-	log.Debugln("sending Relinquish lock to", peer)
-	defer wg.Done()
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
-	if err != nil {
-		log.Errorln("Error dialing peer:", err)
-		ch <- &lockError{
-			node: peer,
-			err:  err,
-		}
-		return
-	}
-	defer conn.Close()
-	client := pb.NewDistSyncClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), server.Timeout)
-	defer cancel()
-	reply, err := client.Relinquish(ctx, &pb.Node{Node: localAddr})
-	ch <- &lockError{
-		node: peer,
-		err:  err,
-	}
-	if err != nil {
-		log.Errorln("Error relinquishing:", err)
-	} else {
-		log.Debugln("Reply from:", reply)
-	}
 }
 
 func (d *Dmutex) Lock() error {
@@ -141,17 +70,8 @@ func (d *Dmutex) Lock() error {
 	d.gateway.Lock()
 
 	// reset Progress
-	d.rpcServer.SetProgress(server.ProgressNotAcquired)
-
-	// reset peers mapping
-	d.currPeers.peersMap = d.Quorums.Peers
-	for k, v := range d.Quorums.Peers {
-		d.currPeers.peersMap[k] = v
-	}
-	fmt.Println(d.currPeers.peersMap)
-	fmt.Println(d.Quorums.Peers)
-
-	err := d.sendRequests(d.currPeers.peersMap)
+	server.Peers.ResetProgress(d.Quorums.Peers)
+	err := d.sendRequests(server.Peers.GetPeers())
 
 	if err != nil {
 		log.Errorln("Error with lock:", err)
@@ -159,57 +79,53 @@ func (d *Dmutex) Lock() error {
 		return err
 	}
 
-	if err = d.rpcServer.GatherReplies(d.currPeers.peersMap); err != nil {
+	if err = d.rpcServer.GatherReplies(); err != nil {
 		d.UnLock()
 		return err
 	}
-	d.rpcServer.SetProgress(server.ProgressAcquired)
 	return nil
 }
 
-func (d *Dmutex) UnLock() error {
+func (d *Dmutex) UnLock() {
 	// unlock the gateway
 	defer d.gateway.Unlock()
-	d.rpcServer.SetProgress(server.ProgressNotAcquired)
+	server.Peers.ResetProgress(d.Quorums.Peers)
 
-	ch := make(chan *lockError, d.currPeers.numPeers())
+	//ch := make(chan *client.LockError, server.Peers.NumPeers())
 
-	d.relinquish(ch)
-	err := checkForError(ch, d.currPeers.getPeers())
+	d.relinquish()
+	//err := checkForError(ch, server.Peers.GetPeers())
 
-	close(ch)
-	return err
+	//close(ch)
+	//return err
 }
 
 func (d *Dmutex) sendRequests(peers map[string]bool) error {
-	ch := make(chan *lockError, len(peers))
+	ch := make(chan *client.LockError, len(peers))
 	var wg sync.WaitGroup
 	defer close(ch)
 	for peer := range peers {
 		wg.Add(1)
-		go sendRequest(peer, ch, &wg)
+		go client.SendRequest(peer, clientConfig, ch, &wg)
 	}
 	wg.Wait()
 	for _ = range peers {
 		req := <-ch
-		if req.err != nil {
-			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.node, req.err.Error())
-			repPeers := d.Quorums.SubstitutePaths(req.node)
+		if req.Err != nil {
+			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.Node, req.Err.Error())
+			repPeers := d.Quorums.SubstitutePaths(req.Node)
 			// if failed node has no children or only 1 child, return error condition.
 			if repPeers == nil || len(repPeers) == 1 {
-				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.node)
+				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
 			}
 
 			repPeersMap := make(map[string]bool, len(repPeers))
 
 			// update current peers to replace failed node with its substitution paths
-			d.currPeers.mutex.Lock()
-			delete(d.currPeers.peersMap, req.node)
 			for _, n := range repPeers {
-				d.currPeers.peersMap[n] = true
-				repPeersMap[n] = true
+				repPeersMap[n] = false
 			}
-			d.currPeers.mutex.Unlock()
+			server.Peers.SubstitutePeer(req.Node, repPeers)
 
 			// recurse with replacement path/peers
 			if err := d.sendRequests(repPeersMap); err != nil {
@@ -217,8 +133,6 @@ func (d *Dmutex) sendRequests(peers map[string]bool) error {
 			}
 		}
 	}
-
-	// err := checkForError(ch, peers)
 	return nil
 }
 
@@ -227,34 +141,21 @@ func (d *Dmutex) recover() {
 	d.rpcServer.TriggerQueueProcess()
 }
 
-func (d *Dmutex) relinquish(ch chan *lockError) {
-	d.rpcServer.SetProgress(server.ProgressNotAcquired)
+func (d *Dmutex) relinquish() {
 	var wg sync.WaitGroup
-	for peer := range d.currPeers.getPeers() {
+	for peer := range server.Peers.GetPeers() {
 		wg.Add(1)
-		go sendRelinquish(peer, &wg, ch)
+		go client.SendRelinquish(peer, clientConfig, &wg)
 	}
 	wg.Wait()
 }
 
-func checkForError(ch chan *lockError, peers map[string]bool) error {
-	for _ = range peers {
-		reqErr := <-ch
-		if reqErr.err != nil {
-			return reqErr.err
-		}
-	}
-	return nil
-}
-
-func (p *peers) getPeers() map[string]bool {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-	return p.peersMap
-}
-
-func (p *peers) numPeers() int {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-	return len(p.peersMap)
-}
+// func checkForError(ch chan *client.LockError, peers map[string]bool) error {
+// 	for _ = range peers {
+// 		reqErr := <-ch
+// 		if reqErr.Err != nil {
+// 			return reqErr.Err
+// 		}
+// 	}
+// 	return nil
+// }

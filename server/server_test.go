@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -55,9 +54,10 @@ func Test_BasicServer(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(reply, ShouldNotBeNil)
 
-		peers := make(map[string]bool)
-		peers["127.0.0.1"] = true
-		errReply := testServer.GatherReplies(peers)
+		currPeers := make(map[string]bool)
+		currPeers["127.0.0.1"] = true
+		Peers.ResetProgress(currPeers)
+		errReply := testServer.GatherReplies()
 		So(errReply, ShouldBeNil)
 	})
 }
@@ -86,32 +86,11 @@ func Test_ErrorGatherReplies(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(reply, ShouldNotBeNil)
 
-		peers := make(map[string]bool)
-		peers["127.0.0.99"] = true
-		errReply := testServer.GatherReplies(peers)
+		currPeers := make(map[string]bool)
+		currPeers["127.0.0.99"] = true
+		Peers.ResetProgress(currPeers)
+		errReply := testServer.GatherReplies()
 		So(errReply, ShouldNotBeNil)
-	})
-}
-
-func Test_Inquire(t *testing.T) {
-	Convey("Test Inquire", t, func() {
-		d := &DistSyncServer{
-			reqQueue:  nil,
-			qMutex:    &sync.RWMutex{},
-			progMutex: &sync.RWMutex{},
-			localAddr: "127.0.0.2",
-			reqsCh:    nil,
-			repliesCh: nil,
-		}
-
-		testServer.SetProgress(ProgressNotAcquired)
-		err := d.sendInquire("127.0.0.1")
-		So(err, ShouldBeNil)
-
-		testServer.SetProgress(ProgressNotAcquired)
-		err = d.sendInquire("127.0.0.1")
-		So(err, ShouldBeNil)
-
 	})
 }
 

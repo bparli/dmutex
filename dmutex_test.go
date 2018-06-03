@@ -1,11 +1,11 @@
 package dmutex
 
 import (
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/bparli/dmutex/bintree"
+	"github.com/bparli/dmutex/client"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
 
@@ -25,32 +25,32 @@ func setupTestRPC() {
 			return
 		}
 	}
+	clientConfig = &client.Config{
+		LocalAddr:  localAddr,
+		RPCPort:    server.RPCPort,
+		RPCTimeout: 3 * time.Second,
+	}
+
 	started = true
 }
 
 func Test_Dmutex(t *testing.T) {
 	Convey("Test Send Request and Relinquish", t, func() {
 
-		peersMap := make(map[string]bool)
-		dmutex = &Dmutex{
-			currPeers: &peers{
-				peersMap: peersMap,
-				mutex:    &sync.RWMutex{},
-			},
-		}
+		dmutex = &Dmutex{}
 
 		nodes := []string{"127.0.0.1"}
 		t, _ := bintree.NewTree(nodes)
 		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
-		dmutex.currPeers.peersMap = dmutex.Quorums.Peers
 
 		setupTestRPC()
+		server.Peers.ResetProgress(dmutex.Quorums.Peers)
 		dmutex.rpcServer = testServer
 
 		err := dmutex.sendRequests(dmutex.Quorums.Peers)
 		So(err, ShouldBeNil)
 
-		ch := make(chan *lockError, 1)
+		ch := make(chan *client.LockError, 1)
 		dmutex.relinquish(ch)
 		close(ch)
 	})
