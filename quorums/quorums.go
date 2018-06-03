@@ -41,7 +41,6 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *Quorums {
 			peers[peer] = true
 		}
 	}
-
 	return &Quorums{
 		MyQuorums: myQuorums,
 		Peers:     peers,

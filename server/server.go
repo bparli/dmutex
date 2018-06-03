@@ -72,7 +72,7 @@ func (r *DistSyncServer) serveRequests() {
 		min := r.readMin()
 
 		// there should only be one outstanding request in queue from a given node
-		PurgeNodeFromQueue(req.Node)
+		r.PurgeNodeFromQueue(req.Node)
 
 		timeStamp, err := ptypes.Timestamp(req.Tstmp)
 		if err != nil {
@@ -109,6 +109,12 @@ func (r *DistSyncServer) GatherReplies(peers map[string]bool) error {
 		mutex:     &sync.Mutex{},
 		currPeers: peers,
 	}
+	// Set each peer to false since we haven't received a Reply yet
+	for p := range peers {
+		peers[p] = false
+	}
+
+	// Set the timeout clock
 	startTime := time.Now()
 
 outer:
@@ -135,7 +141,6 @@ outer:
 			}
 		}
 	}
-	rpcSrv.SetProgress(ProgressAcquired)
 	return nil
 }
 
@@ -168,6 +173,7 @@ func (r *DistSyncServer) Request(ctx context.Context, req *pb.LockReq) (*pb.Node
 
 	log.Debugln("Incoming Request from", req.Node)
 	r.reqsCh <- req
+	log.Debugln("Sent req over channel")
 	return &pb.Node{Node: r.localAddr}, nil
 }
 
@@ -183,9 +189,12 @@ func (r *DistSyncServer) sendInquire(node string) error {
 	client := pb.NewDistSyncClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	_, err = client.Inquire(ctx, &pb.Node{Node: r.localAddr})
+	answer, err := client.Inquire(ctx, &pb.Node{Node: r.localAddr})
 	if err != nil {
 		return err
+	}
+	if answer.Relinquish {
+		r.PurgeNodeFromQueue(node)
 	}
 	return nil
 }
@@ -195,7 +204,7 @@ func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.Inquire
 		Yield:      false,
 		Relinquish: false,
 	}
-	if rpcSrv.checkProgress() == ProgressAcquired {
+	if r.checkProgress() == ProgressAcquired {
 		log.Debugln("Lock already acquired, block on Inquire")
 		// block until the lock is ready to be released
 		for {
@@ -228,32 +237,23 @@ func (r *DistSyncServer) SetProgress(setting int) {
 
 func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*pb.Node, error) {
 	node := &pb.Node{Node: r.localAddr}
-	log.Debugln("Received relinquish", relinquish.Node)
-	item := r.readMin()
-	if item == nil {
-		log.Errorln("Error with Relinquish.  Minimum item on queue is nil")
-		return node, nil // timeout may have occured while relinquish was in flight.  still want to log it though
-	}
-	// search the rest of the queue for the right relinquish
-	// messages might have arrived out of order
-	if item.Node != relinquish.Node {
-		r.qMutex.RLock()
-		qlen := r.reqQueue.Len()
-		if qlen >= 2 {
-			for i := 1; i < qlen; i++ {
-				if (*r.reqQueue)[i].Node == relinquish.Node {
-					r.qMutex.RUnlock()
-					r.remove(i)
-					r.processQueue()
-					return node, nil
-				}
-			}
+	log.Debugln("Received relinquish from node:", relinquish.Node)
+	r.qMutex.RLock()
+	qlen := r.reqQueue.Len()
+
+	// search entire queue since Relinquish may be called from nodes giving up their request
+	// before acquiring the Lock
+	for i := 0; i < qlen; i++ {
+		if (*r.reqQueue)[i].Node == relinquish.Node {
 			r.qMutex.RUnlock()
-			return nil, errors.New("Error with Relinquish.  Minimum item from node not found")
+			r.remove(i)
+			go r.processQueue()
+			return node, nil
 		}
 	}
-	r.pop()
-	r.processQueue()
+	r.qMutex.RUnlock()
+
+	// if we get here, the node was not found.  it was already removed via the Inquire -> Relinquish flow
 	return node, nil
 }
 
@@ -261,7 +261,6 @@ func NewDistSyncServer(addr string, numMembers int, timeout time.Duration) (*Dis
 	reqQueue := &queue.ReqHeap{}
 	heap.Init(reqQueue)
 
-	// set channel buffers to be very high for recovery scenarios
 	reqsCh := make(chan *pb.LockReq, numMembers)
 	repliesCh := make(chan *pb.Node, numMembers)
 
@@ -292,44 +291,40 @@ func NewDistSyncServer(addr string, numMembers int, timeout time.Duration) (*Dis
 	return rpcSrv, nil
 }
 
-func (d *DistSyncServer) pop() {
-	d.remove(0)
+func (r *DistSyncServer) pop() {
+	r.remove(0)
 }
 
-func (d *DistSyncServer) remove(index int) {
-	d.qMutex.Lock()
-	defer d.qMutex.Unlock()
-	if d.reqQueue.Len() >= index+1 {
-		heap.Remove(d.reqQueue, index)
+func (r *DistSyncServer) remove(index int) {
+	r.qMutex.Lock()
+	defer r.qMutex.Unlock()
+	if r.reqQueue.Len() >= index+1 {
+		heap.Remove(r.reqQueue, index)
 	}
 }
 
-func (d *DistSyncServer) push(args *queue.Mssg) {
-	d.qMutex.Lock()
-	defer d.qMutex.Unlock()
-	heap.Push(d.reqQueue, args)
+func (r *DistSyncServer) push(args *queue.Mssg) {
+	r.qMutex.Lock()
+	defer r.qMutex.Unlock()
+	heap.Push(r.reqQueue, args)
 }
 
-func (d *DistSyncServer) readMin() *queue.Mssg {
-	d.qMutex.RLock()
-	defer d.qMutex.RUnlock()
-	if d.reqQueue.Len() > 0 {
-		msg := (*d.reqQueue)[0]
+func (r *DistSyncServer) readMin() *queue.Mssg {
+	r.qMutex.RLock()
+	defer r.qMutex.RUnlock()
+	if r.reqQueue.Len() > 0 {
+		msg := (*r.reqQueue)[0]
 		return msg
 	}
 	return nil
 }
 
-func PurgeNodeFromQueue(node string) {
-	rpcSrv.qMutex.Lock()
-	defer rpcSrv.qMutex.Unlock()
-	purge(node)
-}
-
-func purge(node string) {
-	for i := 0; i < rpcSrv.reqQueue.Len(); i++ {
-		if (*rpcSrv.reqQueue)[i].Node == node {
-			heap.Remove(rpcSrv.reqQueue, i)
+func (r *DistSyncServer) PurgeNodeFromQueue(node string) {
+	r.qMutex.Lock()
+	defer r.qMutex.Unlock()
+	for i := 0; i < r.reqQueue.Len(); i++ {
+		if (*r.reqQueue)[i].Node == node {
+			heap.Remove(r.reqQueue, i)
 		}
 	}
 }

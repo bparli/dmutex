@@ -22,11 +22,12 @@ var (
 func setupTestRPC() {
 	var err error
 	if !started || testServer == nil {
-		testServer, err = NewDistSyncServer("127.0.0.1", 10, 10*time.Second)
+		testServer, err = NewDistSyncServer("127.0.0.1", 10, 2*time.Second)
 		if err != nil {
 			return
 		}
 	}
+
 	started = true
 }
 
@@ -45,13 +46,8 @@ func Test_BasicServer(t *testing.T) {
 		defer cancel()
 
 		reply, err := client.Request(ctx, &pb.LockReq{Node: "127.0.0.1", Tstmp: ptypes.TimestampNow()})
-
 		So(err, ShouldBeNil)
 		So(reply, ShouldHaveSameTypeAs, &pb.Node{})
-
-		peers := make(map[string]bool)
-		peers["127.0.0.1"] = true
-		errReply := testServer.GatherReplies(peers)
 
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -59,14 +55,41 @@ func Test_BasicServer(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(reply, ShouldNotBeNil)
 
-		peers["127.0.0.1"] = false
-		errReply = testServer.GatherReplies(peers)
+		peers := make(map[string]bool)
+		peers["127.0.0.1"] = true
+		errReply := testServer.GatherReplies(peers)
+		So(errReply, ShouldBeNil)
+	})
+}
+
+func Test_ErrorGatherReplies(t *testing.T) {
+	Convey("Init server, Send request, and Gather Reply (with error condition)", t, func() {
+
+		setupTestRPC()
+
+		var opts []grpc.DialOption
+		opts = append(opts, grpc.WithInsecure())
+		conn, _ := grpc.Dial("127.0.0.1:7070", opts...)
+
+		defer conn.Close()
+		client := pb.NewDistSyncClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		reply, err := client.Request(ctx, &pb.LockReq{Node: "127.0.0.1", Tstmp: ptypes.TimestampNow()})
+		So(err, ShouldBeNil)
+		So(reply, ShouldHaveSameTypeAs, &pb.Node{})
+
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err = client.Reply(ctx, &pb.Node{Node: "127.0.0.1"})
+		reply, err = client.Reply(ctx, &pb.Node{Node: "127.0.0.1"})
 		So(err, ShouldBeNil)
-		So(errReply, ShouldNotBeNil)
+		So(reply, ShouldNotBeNil)
 
+		peers := make(map[string]bool)
+		peers["127.0.0.99"] = true
+		errReply := testServer.GatherReplies(peers)
+		So(errReply, ShouldNotBeNil)
 	})
 }
 
@@ -85,11 +108,7 @@ func Test_Inquire(t *testing.T) {
 		err := d.sendInquire("127.0.0.1")
 		So(err, ShouldBeNil)
 
-		testServer.SetProgress(ProgressAcquired)
-		go func() {
-			time.Sleep(1 * time.Second)
-			testServer.SetProgress(ProgressNotAcquired)
-		}()
+		testServer.SetProgress(ProgressNotAcquired)
 		err = d.sendInquire("127.0.0.1")
 		So(err, ShouldBeNil)
 
@@ -102,6 +121,7 @@ func Test_Relinquish(t *testing.T) {
 			Node:    "127.0.0.1",
 			Replied: false,
 		}
+		testServer.pop()
 		testServer.push(args)
 
 		var opts []grpc.DialOption
@@ -113,7 +133,9 @@ func Test_Relinquish(t *testing.T) {
 		defer cancel()
 
 		_, err := client.Relinquish(ctx, &pb.Node{Node: "127.0.0.1"})
+		So(testServer.reqQueue.Len(), ShouldEqual, 0)
 		So(err, ShouldBeNil)
+		So(testServer.reqQueue.Len(), ShouldEqual, 0)
 
 		argsB := &queue.Mssg{
 			Node:    "127.0.0.33",
@@ -124,10 +146,9 @@ func Test_Relinquish(t *testing.T) {
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, err = client.Relinquish(ctx, &pb.Node{Node: "127.0.0.1"})
-		So(err, ShouldBeNil)
+		So(err, ShouldNotBeNil)
 
 		testServer.pop()
-
 		So(testServer.reqQueue.Len(), ShouldEqual, 0)
 	})
 }

@@ -46,7 +46,7 @@ func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
 		nodeIP := strings.Split(node, ":")[0]
 		nodeIPs = append(nodeIPs, nodeIP)
 	}
-	localIP := strings.Split(localAddr, ":")[0]
+	localIP := strings.Split(nodeAddr, ":")[0]
 	localAddr = nodeAddr
 
 	t, err := bintree.NewTree(nodeIPs)
@@ -56,6 +56,7 @@ func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
 
 	qms := quorums.NewQuorums(t, nodeIPs, localIP)
 	peersMap := make(map[string]bool)
+	fmt.Println(qms.Peers)
 
 	dmutex = &Dmutex{
 		Quorums:   qms,
@@ -71,12 +72,12 @@ func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
 	if err != nil {
 		log.Fatalln(err)
 	}
-
 	return dmutex
 }
 
-func sendRequest(peer string, ch chan<- *lockError) {
-	log.Debugln("sending Request for lock to", peer)
+func sendRequest(peer string, ch chan<- *lockError, wg *sync.WaitGroup) {
+	log.Debugln("Sending Request for lock to", peer)
+	defer wg.Done()
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithInsecure())
 	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
@@ -144,26 +145,32 @@ func (d *Dmutex) Lock() error {
 
 	// reset peers mapping
 	d.currPeers.peersMap = d.Quorums.Peers
+	for k, v := range d.Quorums.Peers {
+		d.currPeers.peersMap[k] = v
+	}
+	fmt.Println(d.currPeers.peersMap)
+	fmt.Println(d.Quorums.Peers)
 
 	err := d.sendRequests(d.currPeers.peersMap)
 
 	if err != nil {
 		log.Errorln("Error with lock:", err)
-		defer d.gateway.Unlock()
-		d.recover()
+		d.UnLock()
 		return err
 	}
 
-	if err = d.rpcServer.GatherReplies(d.Quorums.Peers); err != nil {
-		defer d.gateway.Unlock()
-		d.recover()
+	if err = d.rpcServer.GatherReplies(d.currPeers.peersMap); err != nil {
+		d.UnLock()
+		return err
 	}
-	return err
+	d.rpcServer.SetProgress(server.ProgressAcquired)
+	return nil
 }
 
 func (d *Dmutex) UnLock() error {
 	// unlock the gateway
 	defer d.gateway.Unlock()
+	d.rpcServer.SetProgress(server.ProgressNotAcquired)
 
 	ch := make(chan *lockError, d.currPeers.numPeers())
 
@@ -176,17 +183,21 @@ func (d *Dmutex) UnLock() error {
 
 func (d *Dmutex) sendRequests(peers map[string]bool) error {
 	ch := make(chan *lockError, len(peers))
+	var wg sync.WaitGroup
+	defer close(ch)
 	for peer := range peers {
-		go sendRequest(peer, ch)
+		wg.Add(1)
+		go sendRequest(peer, ch, &wg)
 	}
+	wg.Wait()
 	for _ = range peers {
 		req := <-ch
 		if req.err != nil {
-			log.Errorf("Error sending request to node %s.  Trying replacement quorum.  Error: %s", req.node, req.err.Error())
+			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.node, req.err.Error())
 			repPeers := d.Quorums.SubstitutePaths(req.node)
 			// if failed node has no children or only 1 child, return error condition.
 			if repPeers == nil || len(repPeers) == 1 {
-				return fmt.Errorf("Error: Node %s has failed and unable to build replacement quorum", req.node)
+				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.node)
 			}
 
 			repPeersMap := make(map[string]bool, len(repPeers))
@@ -199,6 +210,7 @@ func (d *Dmutex) sendRequests(peers map[string]bool) error {
 				repPeersMap[n] = true
 			}
 			d.currPeers.mutex.Unlock()
+
 			// recurse with replacement path/peers
 			if err := d.sendRequests(repPeersMap); err != nil {
 				return err
@@ -207,12 +219,11 @@ func (d *Dmutex) sendRequests(peers map[string]bool) error {
 	}
 
 	// err := checkForError(ch, peers)
-	close(ch)
 	return nil
 }
 
 func (d *Dmutex) recover() {
-	server.PurgeNodeFromQueue(localAddr)
+	d.rpcServer.PurgeNodeFromQueue(localAddr)
 	d.rpcServer.TriggerQueueProcess()
 }
 

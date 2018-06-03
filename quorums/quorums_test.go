@@ -13,7 +13,7 @@ func Test_NewQuorums(t *testing.T) {
 		t, _ := bintree.NewTree(nodes)
 		testQuorum := NewQuorums(t, nodes, "192.168.1.14")
 		So(len(testQuorum.MyQuorums), ShouldEqual, 2)
-		So(testQuorum.NumPeers, ShouldEqual, 4)
+		So(testQuorum.NumPeers, ShouldEqual, 5)
 	})
 }
 
