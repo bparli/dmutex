@@ -146,7 +146,8 @@ func Test_Relinquish(t *testing.T) {
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, err = client.Relinquish(ctx, &pb.Node{Node: "127.0.0.1"})
-		So(err, ShouldNotBeNil)
+		So(err, ShouldBeNil)
+		So(testServer.reqQueue.Len(), ShouldEqual, 1)
 
 		testServer.pop()
 		So(testServer.reqQueue.Len(), ShouldEqual, 0)

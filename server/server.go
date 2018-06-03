@@ -59,7 +59,9 @@ func (r *DistSyncServer) processQueue() {
 	}
 	if !min.Replied {
 		if err := r.sendReply(min); err != nil {
-			log.Errorln("Error sending reply to node", min.Node, err)
+			log.Errorln("Error sending reply to node.  Removing from queue", min.Node, err)
+			r.PurgeNodeFromQueue(min.Node)
+			go r.processQueue()
 		} else {
 			min.Replied = true
 		}
@@ -105,14 +107,14 @@ func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, e
 
 func (r *DistSyncServer) GatherReplies(peers map[string]bool) error {
 	log.Debugln("Gathering Replies, waiting on ", peers)
-	replies = &peerReplies{
-		mutex:     &sync.Mutex{},
-		currPeers: peers,
-	}
+	replies.mutex.Lock()
+	replies.currPeers = peers
+
 	// Set each peer to false since we haven't received a Reply yet
 	for p := range peers {
 		peers[p] = false
 	}
+	replies.mutex.Unlock()
 
 	// Set the timeout clock
 	startTime := time.Now()
@@ -216,7 +218,9 @@ func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.Inquire
 	} else {
 		log.Debugln("Progress Not Acquired, Yield")
 		replies.mutex.Lock()
-		replies.currPeers[inq.Node] = false
+		if _, ok := replies.currPeers[inq.Node]; ok {
+			replies.currPeers[inq.Node] = false
+		}
 		replies.mutex.Unlock()
 		reply.Yield = true
 	}
@@ -275,6 +279,10 @@ func NewDistSyncServer(addr string, numMembers int, timeout time.Duration) (*Dis
 		localAddr: addr,
 		reqsCh:    reqsCh,
 		repliesCh: repliesCh,
+	}
+
+	replies = &peerReplies{
+		mutex: &sync.Mutex{},
 	}
 
 	lis, err := net.Listen("tcp", addr+":"+RPCPort)
