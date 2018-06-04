@@ -95,11 +95,13 @@ func (r *DistSyncServer) serveRequests() {
 			answer, err := client.SendInquire(min.Node, clientConfig)
 			if err != nil {
 				log.Errorln("Error sending Inquire", err)
-			}
-			if answer.Relinquish {
 				r.PurgeNodeFromQueue(min.Node)
-			} else if answer.Yield {
-				r.undoReply(0)
+			} else {
+				if answer.Relinquish {
+					r.PurgeNodeFromQueue(min.Node)
+				} else if answer.Yield {
+					r.undoReply(0)
+				}
 			}
 			log.Infoln("Inquire Result was:", answer)
 		}
@@ -139,6 +141,8 @@ outer:
 						continue outer
 					}
 				}
+				break outer
+				Peers.mutex.Unlock()
 			}
 			Peers.mutex.Unlock()
 		default:
