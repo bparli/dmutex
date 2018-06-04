@@ -91,13 +91,7 @@ func (d *Dmutex) UnLock() {
 	defer d.gateway.Unlock()
 	server.Peers.ResetProgress(d.Quorums.Peers)
 
-	//ch := make(chan *client.LockError, server.Peers.NumPeers())
-
 	d.relinquish()
-	//err := checkForError(ch, server.Peers.GetPeers())
-
-	//close(ch)
-	//return err
 }
 
 func (d *Dmutex) sendRequests(peers map[string]bool) error {
