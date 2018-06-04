@@ -26,6 +26,13 @@ func Test_SubstitutePaths(t *testing.T) {
 		So(testQuorum.SubstitutePaths("192.168.1.17"), ShouldContain, "192.168.1.19")
 		So(testQuorum.SubstitutePaths("192.168.1.17"), ShouldContain, "192.168.1.15")
 		So(testQuorum.SubstitutePaths("192.168.1.8"), ShouldHaveLength, 1)
+
+		nodes = []string{"192.168.1.8", "192.168.1.9", "192.168.1.10"}
+		t, _ = bintree.NewTree(nodes)
+		testQuorum = NewQuorums(t, nodes, "192.168.1.9")
+		So(testQuorum.SubstitutePaths("192.168.1.9"), ShouldHaveLength, 2)
+		So(testQuorum.SubstitutePaths("192.168.1.9"), ShouldContain, "192.168.1.8")
+		So(testQuorum.SubstitutePaths("192.168.1.9"), ShouldContain, "192.168.1.10")
 	})
 }
 

@@ -100,7 +100,7 @@ func (r *DistSyncServer) serveRequests() {
 				if answer.Relinquish {
 					r.PurgeNodeFromQueue(min.Node)
 				} else if answer.Yield {
-					r.undoReply(0)
+					r.undoReplies()
 				}
 			}
 			log.Infoln("Inquire Result was:", answer)
@@ -141,8 +141,8 @@ outer:
 						continue outer
 					}
 				}
-				break outer
 				Peers.mutex.Unlock()
+				break outer
 			}
 			Peers.mutex.Unlock()
 		default:
@@ -270,11 +270,11 @@ func (r *DistSyncServer) remove(index int) {
 	}
 }
 
-func (r *DistSyncServer) undoReply(index int) {
+func (r *DistSyncServer) undoReplies() {
 	r.qMutex.Lock()
 	defer r.qMutex.Unlock()
-	if r.reqQueue.Len() >= index+1 {
-		(*r.reqQueue)[0].Replied = false
+	for i := 0; i < r.reqQueue.Len(); i++ {
+		(*r.reqQueue)[i].Replied = false
 	}
 }
 
@@ -321,13 +321,12 @@ func (p *peersMap) checkProgress() int {
 
 func (p *peersMap) ResetProgress(currPeers map[string]bool) {
 	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	p.replies = make(map[string]bool)
-
 	// Init each peer to false since we haven't received a Reply yet
 	for peer := range currPeers {
 		p.replies[peer] = false
 	}
-	p.mutex.Unlock()
 }
 
 func (p *peersMap) SubstitutePeer(peer string, replace []string) {
@@ -342,12 +341,12 @@ func (p *peersMap) SubstitutePeer(peer string, replace []string) {
 
 func (p *peersMap) GetPeers() map[string]bool {
 	p.mutex.RLock()
-	p.mutex.RUnlock()
+	defer p.mutex.RUnlock()
 	return p.replies
 }
 
 func (p *peersMap) NumPeers() int {
 	p.mutex.RLock()
-	p.mutex.RUnlock()
+	defer p.mutex.RUnlock()
 	return len(p.replies)
 }

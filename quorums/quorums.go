@@ -54,16 +54,24 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *Quorums {
 // from the site’s two children and ending in leaf node
 func (q *Quorums) SubstitutePaths(node string) []string {
 	var final []string
-	var child string
+	var childI string
+	var childII string
 
 	// since each node's path starts with itself as root, check if
 	// the node is the only entry in the path
 	if allPaths := q.fullTree.NodePaths(node); len(allPaths[0]) > 1 {
 		for _, path := range allPaths {
-			if child != path[1] {
-				child = path[1]
-				for _, node := range path[1:] {
-					final = append(final, node)
+			if childI != path[1] && childII != path[1] {
+				if childI == "" {
+					childI = path[1]
+					for _, node := range path[1:] {
+						final = append(final, node)
+					}
+				} else if childII == "" {
+					childII = path[1]
+					for _, node := range path[1:] {
+						final = append(final, node)
+					}
 				}
 			}
 		}

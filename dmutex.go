@@ -72,13 +72,11 @@ func (d *Dmutex) Lock() error {
 	// reset Progress
 	server.Peers.ResetProgress(d.Quorums.Peers)
 	err := d.sendRequests(server.Peers.GetPeers())
-
 	if err != nil {
 		log.Errorln("Error with lock:", err)
 		d.UnLock()
 		return err
 	}
-
 	if err = d.rpcServer.GatherReplies(); err != nil {
 		d.UnLock()
 		return err
@@ -89,9 +87,8 @@ func (d *Dmutex) Lock() error {
 func (d *Dmutex) UnLock() {
 	// unlock the gateway
 	defer d.gateway.Unlock()
-	server.Peers.ResetProgress(d.Quorums.Peers)
-
 	d.relinquish()
+	server.Peers.ResetProgress(d.Quorums.Peers)
 }
 
 func (d *Dmutex) sendRequests(peers map[string]bool) error {
@@ -137,19 +134,10 @@ func (d *Dmutex) recover() {
 
 func (d *Dmutex) relinquish() {
 	var wg sync.WaitGroup
-	for peer := range server.Peers.GetPeers() {
+	peers := server.Peers.GetPeers()
+	for peer := range peers {
 		wg.Add(1)
 		go client.SendRelinquish(peer, clientConfig, &wg)
 	}
 	wg.Wait()
 }
-
-// func checkForError(ch chan *client.LockError, peers map[string]bool) error {
-// 	for _ = range peers {
-// 		reqErr := <-ch
-// 		if reqErr.Err != nil {
-// 			return reqErr.Err
-// 		}
-// 	}
-// 	return nil
-// }
