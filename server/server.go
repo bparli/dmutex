@@ -62,8 +62,8 @@ func (r *DistSyncServer) processQueue() {
 	if !min.Replied {
 		if err := client.SendReply(min, clientConfig); err != nil {
 			log.Errorln("Error sending reply to node.  Removing from queue", min.Node, err)
-			go r.PurgeNodeFromQueue(min.Node)
-			go r.processQueue()
+			go r.purgeNodeFromQueue(min.Node)
+
 		} else {
 			log.Debugf("Sent Reply to node %s for lock", min.Node)
 			min.Replied = true
@@ -76,7 +76,7 @@ func (r *DistSyncServer) serveRequests() {
 		req := <-r.reqsCh
 
 		// there should only be one outstanding request in queue from a given node
-		r.PurgeNodeFromQueue(req.Node)
+		r.purgeNodeFromQueue(req.Node)
 		min := r.readMin()
 
 		timeStamp, err := ptypes.Timestamp(req.Tstmp)
@@ -95,10 +95,10 @@ func (r *DistSyncServer) serveRequests() {
 			answer, err := client.SendInquire(min.Node, clientConfig)
 			if err != nil {
 				log.Errorln("Error sending Inquire", err)
-				r.PurgeNodeFromQueue(min.Node)
+				r.purgeNodeFromQueue(min.Node)
 			} else {
 				if answer.Relinquish {
-					r.PurgeNodeFromQueue(min.Node)
+					r.purgeNodeFromQueue(min.Node)
 				} else if answer.Yield {
 					r.undoReplies()
 				}
@@ -202,7 +202,6 @@ func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.Inquire
 		Peers.mutex.Unlock()
 		reply.Yield = true
 	}
-	go r.processQueue()
 	return reply, nil
 }
 
@@ -218,7 +217,6 @@ func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*
 		if (*r.reqQueue)[i].Node == relinquish.Node {
 			r.qMutex.RUnlock()
 			r.remove(i)
-			go r.processQueue()
 			return node, nil
 		}
 	}
@@ -307,7 +305,7 @@ func (r *DistSyncServer) readMin() *queue.Mssg {
 	return nil
 }
 
-func (r *DistSyncServer) PurgeNodeFromQueue(node string) {
+func (r *DistSyncServer) purgeNodeFromQueue(node string) {
 	r.qMutex.Lock()
 	defer r.qMutex.Unlock()
 	for i := 0; i < r.reqQueue.Len(); i++ {
@@ -315,10 +313,6 @@ func (r *DistSyncServer) PurgeNodeFromQueue(node string) {
 			heap.Remove(r.reqQueue, i)
 		}
 	}
-}
-
-func (r *DistSyncServer) TriggerQueueProcess() {
-	r.processQueue()
 }
 
 func (p *peersMap) checkProgress() int {

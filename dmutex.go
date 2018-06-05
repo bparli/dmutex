@@ -116,6 +116,10 @@ func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error 
 			}
 
 			repPeersMap := genReplacementMap(peers, replacementPeers)
+			if len(repPeersMap) == 0 {
+				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
+			}
+
 			server.Peers.SubstitutePeer(req.Node, repPeersMap)
 
 			// recurse with replacement path/peers
@@ -140,11 +144,6 @@ func genReplacementMap(peers map[string]bool, replacementPeers []string) map[str
 		repPeersMap[n] = false
 	}
 	return repPeersMap
-}
-
-func (d *Dmutex) recover() {
-	d.rpcServer.PurgeNodeFromQueue(localAddr)
-	d.rpcServer.TriggerQueueProcess()
 }
 
 func (d *Dmutex) relinquish() {
