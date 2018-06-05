@@ -8,8 +8,10 @@ import (
 
 	"github.com/bparli/dmutex/bintree"
 	"github.com/bparli/dmutex/client"
+	pb "github.com/bparli/dmutex/dsync"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
+	"github.com/golang/protobuf/ptypes"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -71,7 +73,8 @@ func (d *Dmutex) Lock() error {
 
 	// reset Progress
 	server.Peers.ResetProgress(d.Quorums.Peers)
-	err := d.sendRequests(server.Peers.GetPeers())
+	lockReq := &pb.LockReq{Node: clientConfig.LocalAddr, Tstmp: ptypes.TimestampNow()}
+	err := d.sendRequests(server.Peers.GetPeers(), lockReq)
 	if err != nil {
 		log.Errorln("Error with lock:", err)
 		d.rpcServer.DrainRepliesCh()
@@ -79,6 +82,7 @@ func (d *Dmutex) Lock() error {
 		return err
 	}
 	if err = d.rpcServer.GatherReplies(); err != nil {
+		d.rpcServer.DrainRepliesCh()
 		d.UnLock()
 		return err
 	}
@@ -92,40 +96,50 @@ func (d *Dmutex) UnLock() {
 	server.Peers.ResetProgress(d.Quorums.Peers)
 }
 
-func (d *Dmutex) sendRequests(peers map[string]bool) error {
+func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error {
 	ch := make(chan *client.LockError, len(peers))
 	var wg sync.WaitGroup
 	defer close(ch)
 	for peer := range peers {
 		wg.Add(1)
-		go client.SendRequest(peer, clientConfig, ch, &wg)
+		go client.SendRequest(peer, clientConfig, ch, &wg, lockReq)
 	}
 	wg.Wait()
 	for _ = range peers {
 		req := <-ch
 		if req.Err != nil {
 			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.Node, req.Err.Error())
-			repPeers := d.Quorums.SubstitutePaths(req.Node)
+			replacementPeers := d.Quorums.SubstitutePaths(req.Node)
 			// if failed node has no children or only 1 child, return error condition.
-			if repPeers == nil || len(repPeers) == 1 {
+			if replacementPeers == nil || len(replacementPeers) == 1 {
 				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
 			}
 
-			repPeersMap := make(map[string]bool, len(repPeers))
-
-			// update current peers to replace failed node with its substitution paths
-			for _, n := range repPeers {
-				repPeersMap[n] = false
-			}
-			server.Peers.SubstitutePeer(req.Node, repPeers)
+			repPeersMap := genReplacementMap(peers, replacementPeers)
+			server.Peers.SubstitutePeer(req.Node, repPeersMap)
 
 			// recurse with replacement path/peers
-			if err := d.sendRequests(repPeersMap); err != nil {
-				return err
-			}
+			return d.sendRequests(repPeersMap, lockReq)
 		}
 	}
 	return nil
+}
+
+func genReplacementMap(peers map[string]bool, replacementPeers []string) map[string]bool {
+	var newPeers []string
+	for _, p := range replacementPeers {
+		if _, ok := peers[p]; !ok {
+			newPeers = append(newPeers, p)
+		}
+	}
+
+	repPeersMap := make(map[string]bool, len(newPeers))
+
+	// update current peers to replace failed node with its substitution paths
+	for _, n := range newPeers {
+		repPeersMap[n] = false
+	}
+	return repPeersMap
 }
 
 func (d *Dmutex) recover() {

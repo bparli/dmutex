@@ -8,7 +8,6 @@ import (
 
 	pb "github.com/bparli/dmutex/dsync"
 	"github.com/bparli/dmutex/queue"
-	"github.com/golang/protobuf/ptypes"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -25,7 +24,7 @@ type Config struct {
 	LocalAddr  string
 }
 
-func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.WaitGroup) {
+func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.WaitGroup, lockReq *pb.LockReq) {
 	log.Debugln("Sending Request for lock to", peer)
 	defer wg.Done()
 	var opts []grpc.DialOption
@@ -44,7 +43,7 @@ func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.Wai
 	ctx, cancel := context.WithTimeout(context.Background(), config.RPCTimeout)
 	defer cancel()
 
-	reply, err := cli.Request(ctx, &pb.LockReq{Node: config.LocalAddr, Tstmp: ptypes.TimestampNow()})
+	reply, err := cli.Request(ctx, lockReq)
 	ch <- &LockError{
 		Node: peer,
 		Err:  err,

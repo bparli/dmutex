@@ -342,12 +342,12 @@ func (p *peersMap) ResetProgress(currPeers map[string]bool) {
 	}
 }
 
-func (p *peersMap) SubstitutePeer(peer string, replace []string) {
+func (p *peersMap) SubstitutePeer(peer string, replace map[string]bool) {
 	log.Infof("Substituting node %s with %s", peer, replace)
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	delete(p.replies, peer)
-	for _, n := range replace {
+	for n := range replace {
 		p.replies[n] = false
 	}
 }
