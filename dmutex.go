@@ -74,6 +74,7 @@ func (d *Dmutex) Lock() error {
 	err := d.sendRequests(server.Peers.GetPeers())
 	if err != nil {
 		log.Errorln("Error with lock:", err)
+		d.rpcServer.DrainRepliesCh()
 		d.UnLock()
 		return err
 	}

@@ -154,6 +154,19 @@ outer:
 	return nil
 }
 
+// DrainRepliesCh removes outstanding replies from the replies channel
+// only to be used in error condition
+func (r *DistSyncServer) DrainRepliesCh() {
+	for {
+		select {
+		case <-r.repliesCh:
+			continue
+		default:
+			return
+		}
+	}
+}
+
 func (r *DistSyncServer) Request(ctx context.Context, req *pb.LockReq) (*pb.Node, error) {
 	if timeStamp, err := ptypes.Timestamp(req.Tstmp); err != nil {
 		return nil, errors.New("Error converting request timestamp")
@@ -219,8 +232,8 @@ func NewDistSyncServer(addr string, numMembers int, timeout time.Duration) (*Dis
 	reqQueue := &queue.ReqHeap{}
 	heap.Init(reqQueue)
 
-	reqsCh := make(chan *pb.LockReq, numMembers)
-	repliesCh := make(chan *pb.Node, 2*numMembers)
+	reqsCh := make(chan *pb.LockReq, 100*numMembers)
+	repliesCh := make(chan *pb.Node, 100*numMembers)
 
 	// This timeout is the timeout for all RPC calls, some of which are intentially blocking
 	// if another process is holding the distributed mutex
