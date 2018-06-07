@@ -52,7 +52,7 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *Quorums {
 
 // SubstitutePaths returns two possible paths starting
 // from the site’s two children and ending in leaf node
-func (q *Quorums) SubstitutePaths(node string) []string {
+func (q *Quorums) SubstitutePeers(node string) []string {
 	var final []string
 	var childI string
 	var childII string

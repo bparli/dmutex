@@ -109,21 +109,19 @@ func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error 
 		req := <-ch
 		if req.Err != nil {
 			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.Node, req.Err.Error())
-			replacementPeers := d.Quorums.SubstitutePaths(req.Node)
+			replacementPeers := d.Quorums.SubstitutePeers(req.Node)
 			// if failed node has no children or only 1 child, return error condition.
 			if replacementPeers == nil || len(replacementPeers) == 1 {
 				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
 			}
 
 			repPeersMap := genReplacementMap(peers, replacementPeers)
-			if len(repPeersMap) == 0 {
-				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
-			}
-
 			server.Peers.SubstitutePeer(req.Node, repPeersMap)
-
-			// recurse with replacement path/peers
-			return d.sendRequests(repPeersMap, lockReq)
+			if len(repPeersMap) > 0 {
+				// recurse with replacement path/peers
+				return d.sendRequests(repPeersMap, lockReq)
+				// return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
+			}
 		}
 	}
 	return nil
