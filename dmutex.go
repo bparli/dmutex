@@ -109,15 +109,33 @@ func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error 
 		req := <-ch
 		if req.Err != nil {
 			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.Node, req.Err.Error())
-			replacementPeers := d.Quorums.SubstitutePeers(req.Node)
+			subPaths := d.Quorums.SubstitutePaths(req.Node)
+
+			for ind, path := range subPaths {
+				// check each node in the path except the root
+				// since that is the node to be replaced in this case
+				for _, node := range path[1:] {
+					// can't use this as a replacement since this node is already
+					// in that quorum so remove path
+					if node == localAddr {
+						if ind < len(subPaths)-1 {
+							subPaths = append(subPaths[:ind], subPaths[ind+1:]...)
+						} else {
+							subPaths = subPaths[:ind]
+						}
+					}
+				}
+			}
+
 			// if failed node has no children or only 1 child, return error condition.
-			if replacementPeers == nil || len(replacementPeers) == 1 {
+			if len(subPaths) < 2 {
 				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
 			}
 
-			repPeersMap := genReplacementMap(peers, replacementPeers)
+			repPeersMap := genReplacementMap(peers, subPaths)
 			server.Peers.SubstitutePeer(req.Node, repPeersMap)
 			if len(repPeersMap) > 0 {
+				log.Infof("Using substitute paths for failed node %s:", req.Node, subPaths)
 				// recurse with replacement path/peers
 				return d.sendRequests(repPeersMap, lockReq)
 				// return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
@@ -127,11 +145,14 @@ func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error 
 	return nil
 }
 
-func genReplacementMap(peers map[string]bool, replacementPeers []string) map[string]bool {
+func genReplacementMap(peers map[string]bool, replacementPaths [][]string) map[string]bool {
 	var newPeers []string
-	for _, p := range replacementPeers {
-		if _, ok := peers[p]; !ok {
-			newPeers = append(newPeers, p)
+	for _, p := range replacementPaths {
+		for _, node := range p {
+			// only add the replacement peer if its not already a peer node from another path
+			if _, ok := peers[node]; !ok {
+				newPeers = append(newPeers, node)
+			}
 		}
 	}
 

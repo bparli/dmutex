@@ -6,8 +6,10 @@ import (
 
 	"github.com/bparli/dmutex/bintree"
 	"github.com/bparli/dmutex/client"
+	pb "github.com/bparli/dmutex/dsync"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
+	"github.com/golang/protobuf/ptypes"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -47,11 +49,10 @@ func Test_Dmutex(t *testing.T) {
 		server.Peers.ResetProgress(dmutex.Quorums.Peers)
 		dmutex.rpcServer = testServer
 
-		err := dmutex.sendRequests(dmutex.Quorums.Peers)
+		lockReq := &pb.LockReq{Node: "127.0.0.1", Tstmp: ptypes.TimestampNow()}
+		err := dmutex.sendRequests(dmutex.Quorums.Peers, lockReq)
 		So(err, ShouldBeNil)
 
-		ch := make(chan *client.LockError, 1)
-		dmutex.relinquish(ch)
-		close(ch)
+		dmutex.relinquish()
 	})
 }
