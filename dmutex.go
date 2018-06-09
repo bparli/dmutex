@@ -27,7 +27,7 @@ type Dmutex struct {
 	gateway   *sync.Mutex
 }
 
-func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
+func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string, caFile string) *Dmutex {
 	log.SetLevel(log.DebugLevel)
 
 	var nodeIPs []string
@@ -53,7 +53,7 @@ func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
 		gateway:   &sync.Mutex{},
 	}
 
-	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout)
+	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout, tlsCrtFile, tlsKeyFile)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -62,6 +62,7 @@ func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration) *Dmutex {
 		LocalAddr:  localAddr,
 		RPCPort:    server.RPCPort,
 		RPCTimeout: timeout,
+		TLSCRT:     tlsCrtFile,
 	}
 
 	return dmutex

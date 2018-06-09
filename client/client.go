@@ -10,6 +10,7 @@ import (
 	"github.com/bparli/dmutex/queue"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // LockError captures the rpc error and associated peer Node
@@ -22,16 +23,29 @@ type Config struct {
 	RPCPort    string
 	RPCTimeout time.Duration
 	LocalAddr  string
+	TLSCRT     string
+}
+
+func setupConn(peer string, config *Config) (*grpc.ClientConn, error) {
+	var opts []grpc.DialOption
+	if config.TLSCRT != "" {
+		creds, err := credentials.NewClientTLSFromFile(config.TLSCRT, "")
+		if err != nil {
+			log.Errorf("Error creating client TLS credentials: %s", err)
+			return nil, err
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+	} else {
+		opts = append(opts, grpc.WithInsecure())
+	}
+	return grpc.Dial(fmt.Sprintf("%s:%s", peer, config.RPCPort), opts...)
 }
 
 func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.WaitGroup, lockReq *pb.LockReq) {
 	log.Debugln("Sending Request for lock to", peer)
 	defer wg.Done()
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, config.RPCPort), opts...)
+	conn, err := setupConn(peer, config)
 	if err != nil {
-		log.Errorln("Error dialing peer:", err)
 		ch <- &LockError{
 			Node: peer,
 			Err:  err,
@@ -58,11 +72,8 @@ func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.Wai
 func SendRelinquish(peer string, config *Config, wg *sync.WaitGroup) {
 	log.Debugln("sending Relinquish lock to", peer)
 	defer wg.Done()
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, config.RPCPort), opts...)
+	conn, err := setupConn(peer, config)
 	if err != nil {
-		log.Errorln("Error dialing peer:", err)
 		return
 	}
 	defer conn.Close()
@@ -77,11 +88,9 @@ func SendRelinquish(peer string, config *Config, wg *sync.WaitGroup) {
 	}
 }
 
-func SendInquire(node string, config *Config) (*pb.InquireReply, error) {
-	log.Debugln("Sending Inquire to", node)
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", node, config.RPCPort), opts...)
+func SendInquire(peer string, config *Config) (*pb.InquireReply, error) {
+	log.Debugln("Sending Inquire to", peer)
+	conn, err := setupConn(peer, config)
 	if err != nil {
 		return nil, err
 	}
@@ -95,9 +104,7 @@ func SendInquire(node string, config *Config) (*pb.InquireReply, error) {
 func SendReply(reqArgs *queue.Mssg, config *Config) error {
 	// send reply to head of queue
 	log.Debugln("Sending Reply to", reqArgs)
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", reqArgs.Node, config.RPCPort), opts...)
+	conn, err := setupConn(reqArgs.Node, config)
 	if err != nil {
 		return err
 	}

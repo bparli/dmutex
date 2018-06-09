@@ -21,7 +21,7 @@ var (
 func setupTestRPC() {
 	var err error
 	if !started || testServer == nil {
-		testServer, err = NewDistSyncServer("127.0.0.1", 10, 2*time.Second)
+		testServer, err = NewDistSyncServer("127.0.0.1", 10, 2*time.Second, "", "")
 		if err != nil {
 			return
 		}
