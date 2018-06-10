@@ -8,7 +8,7 @@ Dmutex implements the [Agarwal-El Abbadi quorum-based algorithm](http://www.dcc.
 
 Example
 ===============
-Dmutex is initialized with the local node's address, the addresses of the entire cluster, and a timeout for the RPC calls.  Optional file locations of a TLS certificate and key can be passed to secure cluster traffic.
+Dmutex is initialized with the local node's address, the addresses of the entire cluster, and a timeout for the gRPC calls.  Optional file locations of a TLS certificate and key can be passed in order to secure cluster traffic.
 ```
 import (
   "github.com/bparli/dmutex"
