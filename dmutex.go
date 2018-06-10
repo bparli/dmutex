@@ -27,7 +27,7 @@ type Dmutex struct {
 	gateway   *sync.Mutex
 }
 
-func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string, caFile string) *Dmutex {
+func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
 	log.SetLevel(log.DebugLevel)
 
 	var nodeIPs []string

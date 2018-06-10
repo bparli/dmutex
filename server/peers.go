@@ -24,6 +24,7 @@ func (p *peersMap) checkProgress() int {
 	return ProgressAcquired
 }
 
+// ResetProgress is used to re-init reply gathering to current peers
 func (p *peersMap) ResetProgress(currPeers map[string]bool) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()

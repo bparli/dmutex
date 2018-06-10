@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,5 +131,72 @@ func Test_Relinquish(t *testing.T) {
 
 		testServer.pop()
 		So(testServer.reqQueue.Len(), ShouldEqual, 0)
+	})
+}
+
+func Test_Inquire(t *testing.T) {
+	Convey("Test Inquire", t, func() {
+		So(testServer.reqQueue.Len(), ShouldEqual, 0)
+		Peers = &peersMap{
+			mutex:   &sync.RWMutex{},
+			replies: make(map[string]bool),
+		}
+		Peers.replies["127.0.0.10"] = true
+		Peers.replies["127.0.0.11"] = false
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		rep, err := testServer.Inquire(ctx, &pb.Node{Node: "127.0.0.10"})
+		So(err, ShouldBeNil)
+		So(rep.Yield, ShouldBeTrue)
+		So(Peers.replies["127.0.0.10"], ShouldBeFalse)
+
+		Peers.replies["127.0.0.10"] = true
+		Peers.replies["127.0.0.11"] = true
+
+		go func() {
+			time.Sleep(1 * time.Second)
+			Peers.mutex.Lock()
+			Peers.replies["127.0.0.10"] = false
+			Peers.replies["127.0.0.11"] = false
+			Peers.mutex.Unlock()
+		}()
+
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		rep, err = testServer.Inquire(ctx, &pb.Node{Node: "127.0.0.10"})
+		So(err, ShouldBeNil)
+		So(rep.Relinquish, ShouldBeTrue)
+
+	})
+}
+
+func Test_UndoReplies(t *testing.T) {
+	Convey("Test undo Lock request Replies", t, func() {
+		args := &queue.Mssg{
+			Node:    "127.0.0.10",
+			Replied: true,
+		}
+		testServer.push(args)
+		args.Node = "127.0.0.11"
+		testServer.push(args)
+
+		So(testServer.readMin().Replied, ShouldBeTrue)
+		testServer.undoReplies()
+		So(testServer.readMin().Replied, ShouldBeFalse)
+		testServer.pop()
+		So(testServer.readMin().Replied, ShouldBeFalse)
+	})
+}
+
+func Test_DrainRepliesChannel(t *testing.T) {
+	Convey("Test draining Replies channel", t, func() {
+		testServer.repliesCh <- &pb.Node{Node: "127.0.0.10"}
+		testServer.repliesCh <- &pb.Node{Node: "127.0.0.11"}
+		testServer.repliesCh <- &pb.Node{Node: "127.0.0.12"}
+		testServer.repliesCh <- &pb.Node{Node: "127.0.0.13"}
+		So(len(testServer.repliesCh), ShouldEqual, 4)
+		testServer.DrainRepliesCh()
+		So(len(testServer.repliesCh), ShouldEqual, 0)
 	})
 }
