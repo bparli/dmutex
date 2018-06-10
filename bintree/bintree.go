@@ -64,7 +64,9 @@ func (t *Tree) NodePaths(ipAddr string) [][]string {
 	go t.findNode(ipAddr, t.root, ch)
 	n := <-ch
 	if n != nil {
-		t.getNodePaths(n, n, []string{})
+		if len(n.Paths) == 0 {
+			t.getNodePaths(n, n, []string{})
+		}
 		return n.Paths
 	}
 	log.Errorf("Unable to find node for IP %s", ipAddr)

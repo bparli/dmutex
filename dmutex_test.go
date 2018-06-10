@@ -1,13 +1,10 @@
 package dmutex
 
 import (
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/bparli/dmutex/bintree"
-	"github.com/bparli/dmutex/queue"
-	"github.com/bparli/dmutex/quorums"
+	"github.com/bparli/dmutex/client"
 	"github.com/bparli/dmutex/server"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -21,61 +18,56 @@ var (
 func setupTestRPC() {
 	var err error
 	if !started || testServer == nil {
-		testServer, err = server.NewDistSyncServer("127.0.0.1", 10, 10*time.Second)
+		testServer, err = server.NewDistSyncServer("127.0.0.2", 1, 3*time.Second, "", "")
 		if err != nil {
 			return
 		}
 	}
+	clientConfig = &client.Config{
+		LocalAddr:  localAddr,
+		RPCPort:    server.RPCPort,
+		RPCTimeout: 3 * time.Second,
+	}
 	started = true
-	testServer.SetReady(true)
+}
+
+func Test_DmutexError(t *testing.T) {
+	Convey("Test lock timeout error", t, func() {
+		testdm := NewDMutex("127.0.0.2", []string{"127.0.0.2", "127.0.0.100"}, 2*time.Second, "", "")
+		err := testdm.Lock()
+		So(err, ShouldNotBeNil)
+	})
 }
 
 func Test_Dmutex(t *testing.T) {
-	Convey("Test Send Request and Relinquish", t, func() {
-
-		dmutex = &Dmutex{}
-
-		nodes := []string{"127.0.0.1"}
-		t, _ := bintree.NewTree(nodes)
-		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
-		for _, member := range nodes {
-			dmutex.Quorums.CurrMembers[member] = true
-		}
-
-		err := dmutex.Quorums.BuildCurrQuorums()
+	Convey("Test dmutex lock and unlock", t, func() {
+		testdm := NewDMutex("127.0.0.1", []string{"127.0.0.1"}, 2*time.Second, "", "")
+		err := testdm.Lock()
 		So(err, ShouldBeNil)
+		testdm.UnLock()
 
-		mlist, err := InitMembersList("127.0.0.1:7946", nodes)
-
+		// should be able to lock again
+		err = testdm.Lock()
 		So(err, ShouldBeNil)
-		So(mlist.Members()[0].Addr.String(), ShouldEqual, "127.0.0.1")
-
-		setupTestRPC()
-		dmutex.rpcServer = testServer
-
-		dmutex.Quorums.Ready = true
-		dmutex.Quorums.Healthy = true
-
-		ch := make(chan error, 1)
-		var wg sync.WaitGroup
-		args := &queue.Mssg{
-			Timestamp: time.Now(),
-			Node:      "127.0.0.1",
-			Replied:   false,
-		}
-
-		wg.Add(1)
-		go sendRequest(args, "127.0.0.1", &wg, ch)
-		wg.Wait()
-
-		err = dmutex.checkForError(ch)
-		So(err, ShouldBeNil)
-
-		dmutex.relinquish(args, ch)
-
-		err = dmutex.checkForError(ch)
-		So(err, ShouldBeNil)
-
-		close(ch)
 	})
 }
+
+// func Test_Dmutex(t *testing.T) {
+// 	Convey("Test lock and unlock", t, func() {
+// 		dmutex = &Dmutex{}
+//
+// 		nodes := []string{"127.0.0.1"}
+// 		t, _ := bintree.NewTree(nodes)
+// 		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
+//
+// 		setupTestRPC()
+// 		server.Peers.ResetProgress(dmutex.Quorums.Peers)
+// 		dmutex.rpcServer = testServer
+//
+// 		lockReq := &pb.LockReq{Node: "127.0.0.1", Tstmp: ptypes.TimestampNow()}
+// 		err := dmutex.sendRequests(dmutex.Quorums.Peers, lockReq)
+// 		So(err, ShouldBeNil)
+//
+// 		dmutex.relinquish()
+// 	})
+// }

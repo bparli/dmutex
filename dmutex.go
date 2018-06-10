@@ -1,37 +1,33 @@
 package dmutex
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bparli/dmutex/bintree"
+	"github.com/bparli/dmutex/client"
 	pb "github.com/bparli/dmutex/dsync"
-	"github.com/bparli/dmutex/queue"
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
 	"github.com/golang/protobuf/ptypes"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
 )
 
 var (
-	dmutex   *Dmutex
-	nodeAddr string
+	dmutex       *Dmutex
+	localAddr    string
+	clientConfig *client.Config
 )
 
 type Dmutex struct {
-	Quorums      *quorums.QState
-	rpcServer    *server.DistSyncServer
-	gateway      *sync.Mutex
-	localRequest *queue.Mssg
-	set          bool
+	Quorums   *quorums.Quorums
+	rpcServer *server.DistSyncServer
+	gateway   *sync.Mutex
 }
 
-func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex {
+func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
 	log.SetLevel(log.DebugLevel)
 
 	var nodeIPs []string
@@ -39,8 +35,8 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 		nodeIP := strings.Split(node, ":")[0]
 		nodeIPs = append(nodeIPs, nodeIP)
 	}
-	localIP := strings.Split(localAddr, ":")[0]
-	nodeAddr = localAddr
+	localIP := strings.Split(nodeAddr, ":")[0]
+	localAddr = nodeAddr
 
 	t, err := bintree.NewTree(nodeIPs)
 	if err != nil {
@@ -48,193 +44,134 @@ func NewDMutex(localAddr string, nodes []string, timeout time.Duration) *Dmutex 
 	}
 
 	qms := quorums.NewQuorums(t, nodeIPs, localIP)
+	log.Debugln("Using Quorums: ", qms.MyQuorums)
+	log.Debugln("Using Peers: ", qms.Peers)
 
 	dmutex = &Dmutex{
-		Quorums:      qms,
-		rpcServer:    &server.DistSyncServer{},
-		localRequest: &queue.Mssg{},
-		gateway:      &sync.Mutex{},
-		set:          false,
+		Quorums:   qms,
+		rpcServer: &server.DistSyncServer{},
+		gateway:   &sync.Mutex{},
 	}
 
-	dmutex.Quorums.Mlist, err = InitMembersList(localAddr, nodes)
-	if err != nil {
-		log.Errorln("Error initializing memberlist", err.Error())
-	}
-
-	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout)
+	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout, tlsCrtFile, tlsKeyFile)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	for {
-		log.Debugln("Quorums not ready for node:", localAddr, "Current Quorums:", qms.MyCurrQuorums, "Ideal Quorums", qms.MyQuorums)
-		if !dmutex.Quorums.ValidateMyQuorums() || dmutex.Quorums.Mlist.NumMembers() != len(nodes) {
-			time.Sleep(1 * time.Second)
-		} else {
-			dmutex.Quorums.Ready = true
-			dmutex.Quorums.Healthy = true
-			break
-		}
-	}
-
-	dmutex.rpcServer.SetReady(true)
-
-	log.Debugln("Quorums Validated, testing distributed mutex", qms.MyCurrQuorums)
-
-	if err := dmutex.Lock(); err != nil {
-		log.Fatalln("Unable to Acquire test mutex", err)
-	}
-
-	if err := dmutex.UnLock(); err != nil {
-		log.Fatalln("Unable to Relinquish test mutex", err)
+	clientConfig = &client.Config{
+		LocalAddr:  localAddr,
+		RPCPort:    server.RPCPort,
+		RPCTimeout: timeout,
+		TLSCRT:     tlsCrtFile,
 	}
 
 	return dmutex
 }
 
-func sendRequest(args *queue.Mssg, peer string, wg *sync.WaitGroup, ch chan<- error) {
-	log.Debugln("sending Request for lock to", peer, args)
-	defer wg.Done()
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
-	if err != nil {
-		log.Errorln("Error dialing peer:", err)
-		ch <- err
-		return
-	}
-	defer conn.Close()
-	client := pb.NewDistSyncClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), server.Timeout)
-	defer cancel()
-
-	reply, err := client.Request(ctx, &pb.LockReq{Node: nodeAddr, Tstmp: ptypes.TimestampNow()})
-	ch <- err
-	if err != nil {
-		log.Errorln("Error requesting:", err)
-	} else {
-		log.Debugln("Reply from:", reply)
-	}
-}
-
-func sendRelinquish(args *queue.Mssg, peer string, wg *sync.WaitGroup, ch chan<- error) {
-	log.Debugln("sending Relinquish lock to", peer, args)
-	defer wg.Done()
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%s", peer, server.RPCPort), opts...)
-	if err != nil {
-		log.Errorln("Error dialing peer:", err)
-		ch <- err
-		return
-	}
-	defer conn.Close()
-	client := pb.NewDistSyncClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), server.Timeout)
-	defer cancel()
-	reply, err := client.Relinquish(ctx, &pb.Node{Node: nodeAddr})
-	ch <- err
-	if err != nil {
-		log.Errorln("Error relinquishing:", err)
-	} else {
-		log.Debugln("Reply from:", reply)
-	}
-}
-
 func (d *Dmutex) Lock() error {
-	if !d.Quorums.Healthy || !d.Quorums.Ready {
-		return errors.New("Unable to obtain lock, quorums are not healthy")
-	} else if d.set {
-		return errors.New("Unable to obtain lock, already set")
-	} else {
-		// set the lock in case this Lock() gets called again
-		d.gateway.Lock()
-		defer d.gateway.Unlock()
-		d.set = true
+	// set the lock in case this Lock() gets called again
+	d.gateway.Lock()
 
-		ch := make(chan error, len(d.Quorums.CurrMembers))
-		var wg sync.WaitGroup
-		args := &queue.Mssg{
-			Node:    nodeAddr,
-			Replied: false,
-		}
-
-		d.localRequest = args
-		d.rpcServer.SetProgress(server.ProgressNotAcquired)
-
-		for peer := range d.Quorums.CurrPeers {
-			if d.Quorums.CurrPeers[peer] {
-				wg.Add(1)
-				go sendRequest(args, peer, &wg, ch)
-			}
-		}
-
-		wg.Wait()
-		err := d.checkForError(ch)
-		close(ch)
-		if err != nil {
-			log.Errorln("Error with lock:", err)
-			d.recover()
-			return err
-		}
-
-		if err = d.rpcServer.GatherReplies(args, d.Quorums.CurrPeers, len(d.Quorums.CurrMembers)); err != nil {
-			d.recover()
-		}
+	// reset Progress
+	server.Peers.ResetProgress(d.Quorums.Peers)
+	lockReq := &pb.LockReq{Node: clientConfig.LocalAddr, Tstmp: ptypes.TimestampNow()}
+	err := d.sendRequests(server.Peers.GetPeers(), lockReq)
+	if err != nil {
+		log.Errorln("Error with lock:", err)
+		d.rpcServer.DrainRepliesCh()
+		d.UnLock()
 		return err
 	}
-}
-
-func (d *Dmutex) UnLock() error {
-	if !d.set {
-		return errors.New("Dmutex Unlock Error: no outstanding lock detected")
+	if err = d.rpcServer.GatherReplies(); err != nil {
+		d.rpcServer.DrainRepliesCh()
+		d.UnLock()
+		return err
 	}
-	// set the lock in case this Unlock() gets called again
-	d.gateway.Lock()
+	return nil
+}
+
+func (d *Dmutex) UnLock() {
+	// unlock the gateway
 	defer d.gateway.Unlock()
-
-	ch := make(chan error, len(d.Quorums.CurrMembers))
-
-	args := d.localRequest
-
-	d.relinquish(args, ch)
-	err := d.checkForError(ch)
-
-	close(ch)
-	d.localRequest = &queue.Mssg{}
-	d.set = false
-	return err
+	d.relinquish()
+	server.Peers.ResetProgress(d.Quorums.Peers)
 }
 
-func (d *Dmutex) recover() {
-	server.PurgeNodeFromQueue(nodeAddr)
-	d.rpcServer.SanitizeQueue()
-	d.rpcServer.TriggerQueueProcess()
-	d.localRequest = &queue.Mssg{}
-	d.set = false
-}
-
-func (d *Dmutex) relinquish(args *queue.Mssg, ch chan error) {
+func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error {
+	ch := make(chan *client.LockError, len(peers))
 	var wg sync.WaitGroup
-	for peer := range d.Quorums.CurrPeers {
-		if d.Quorums.CurrPeers[peer] {
-			wg.Add(1)
-			go sendRelinquish(args, peer, &wg, ch)
-		}
+	defer close(ch)
+	for peer := range peers {
+		wg.Add(1)
+		go client.SendRequest(peer, clientConfig, ch, &wg, lockReq)
 	}
 	wg.Wait()
-	d.rpcServer.SetProgress(server.ProgressNotAcquired)
-}
+	for _ = range peers {
+		req := <-ch
+		if req.Err != nil {
+			log.Errorf("Error sending request to node %s.  Trying substitutes.  Error: %s", req.Node, req.Err.Error())
+			subPaths := d.Quorums.SubstitutePaths(req.Node)
 
-func (d *Dmutex) checkForError(ch chan error) error {
-	for peer := range d.Quorums.CurrPeers {
-		if d.Quorums.CurrPeers[peer] {
-			err := <-ch
-			if err != nil {
-				return err
+			for ind, path := range subPaths {
+				// check each node in the path except the root
+				// since that is the node to be replaced in this case
+				for _, node := range path[1:] {
+					// can't use this as a replacement since this node is already
+					// in that quorum so remove path
+					if node == localAddr {
+						if ind < len(subPaths)-1 {
+							subPaths = append(subPaths[:ind], subPaths[ind+1:]...)
+						} else {
+							subPaths = subPaths[:ind]
+						}
+					}
+				}
+			}
+
+			// if failed node has no children or only 1 child, return error condition.
+			if len(subPaths) < 2 {
+				return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
+			}
+
+			repPeersMap := genReplacementMap(peers, subPaths)
+			server.Peers.SubstitutePeer(req.Node, repPeersMap)
+			if len(repPeersMap) > 0 {
+				log.Infof("Using substitute paths for failed node %s:", req.Node, subPaths)
+				// recurse with replacement path/peers
+				return d.sendRequests(repPeersMap, lockReq)
+				// return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
 			}
 		}
 	}
 	return nil
+}
+
+func genReplacementMap(peers map[string]bool, replacementPaths [][]string) map[string]bool {
+	var newPeers []string
+	for _, p := range replacementPaths {
+		for _, node := range p {
+			// only add the replacement peer if its not already a peer node from another path
+			if _, ok := peers[node]; !ok {
+				newPeers = append(newPeers, node)
+			}
+		}
+	}
+
+	repPeersMap := make(map[string]bool, len(newPeers))
+
+	// update current peers to replace failed node with its substitution paths
+	for _, n := range newPeers {
+		repPeersMap[n] = false
+	}
+	return repPeersMap
+}
+
+func (d *Dmutex) relinquish() {
+	var wg sync.WaitGroup
+	peers := server.Peers.GetPeers()
+	for peer := range peers {
+		wg.Add(1)
+		go client.SendRelinquish(peer, clientConfig, &wg)
+	}
+	wg.Wait()
 }
