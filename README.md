@@ -4,7 +4,7 @@ Dmutex is a distributed mutex package written in Go.  It takes a quorum based ap
 
 Overview
 ===============
-Dmutex implements the [Agarwal-El Abbadi quorum-based algorithm](http://www.dcc.fc.up.pt/~INES/aulas/1314/SDM/papers/FaultToleranceDMEagrawal.pdf).  A good overview of the algorithm can be found [here](https://www.cs.uic.edu/~ajayk/Chapter9.pdf) starting on page 50.
+Dmutex implements the [Agarwal-El Abbadi quorum-based algorithm](https://users.soe.ucsc.edu/~scott/courses/Fall11/221/Papers/Sync/agrawal-tocs91.pdf).  A good overview of the algorithm can be found [here](https://www.cs.uic.edu/~ajayk/Chapter9.pdf) starting on page 50.
 
 Example
 ===============
