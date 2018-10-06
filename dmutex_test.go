@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bparli/dmutex/client"
 	"github.com/bparli/dmutex/server"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -15,25 +14,9 @@ var (
 	started    bool
 )
 
-func setupTestRPC() {
-	var err error
-	if !started || testServer == nil {
-		testServer, err = server.NewDistSyncServer("127.0.0.2", 1, 3*time.Second, "", "")
-		if err != nil {
-			return
-		}
-	}
-	clientConfig = &client.Config{
-		LocalAddr:  localAddr,
-		RPCPort:    server.RPCPort,
-		RPCTimeout: 3 * time.Second,
-	}
-	started = true
-}
-
 func Test_DmutexError(t *testing.T) {
 	Convey("Test lock timeout error", t, func() {
-		testdm := NewDMutex("127.0.0.2", []string{"127.0.0.2", "127.0.0.100"}, 2*time.Second, "", "")
+		testdm := NewDMutex("127.0.0.2", []string{"127.0.0.2", "127.0.0.1", "127.0.0.3"}, 2*time.Second, "", "")
 		err := testdm.Lock()
 		So(err, ShouldNotBeNil)
 	})
@@ -52,22 +35,17 @@ func Test_Dmutex(t *testing.T) {
 	})
 }
 
-// func Test_Dmutex(t *testing.T) {
-// 	Convey("Test lock and unlock", t, func() {
-// 		dmutex = &Dmutex{}
-//
-// 		nodes := []string{"127.0.0.1"}
-// 		t, _ := bintree.NewTree(nodes)
-// 		dmutex.Quorums = quorums.NewQuorums(t, nodes, "127.0.0.1")
-//
-// 		setupTestRPC()
-// 		server.Peers.ResetProgress(dmutex.Quorums.Peers)
-// 		dmutex.rpcServer = testServer
-//
-// 		lockReq := &pb.LockReq{Node: "127.0.0.1", Tstmp: ptypes.TimestampNow()}
-// 		err := dmutex.sendRequests(dmutex.Quorums.Peers, lockReq)
-// 		So(err, ShouldBeNil)
-//
-// 		dmutex.relinquish()
-// 	})
-// }
+func Test_ValidateAddr(t *testing.T) {
+	Convey("Test validating addresses", t, func() {
+		testAddr, err := validateAddr("127.0.0.99")
+		So(err, ShouldBeNil)
+		So(testAddr, ShouldEqual, "127.0.0.99")
+
+		testAddr, err = validateAddr("localhost")
+		So(err, ShouldBeNil)
+		So(testAddr, ShouldEqual, "127.0.0.1")
+
+		_, err = validateAddr("Some.Dummy.Address.notlocalhost")
+		So(err, ShouldNotBeNil)
+	})
+}
