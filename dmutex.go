@@ -2,7 +2,7 @@ package dmutex
 
 import (
 	"fmt"
-	"strings"
+	"net"
 	"sync"
 	"time"
 
@@ -27,23 +27,33 @@ type Dmutex struct {
 	gateway   *sync.Mutex
 }
 
-func NewDMutex(nodeAddr string, nodes []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
+func NewDMutex(nodeAddr string, nodeAddrs []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
 	log.SetLevel(log.DebugLevel)
 
-	var nodeIPs []string
-	for _, node := range nodes {
-		nodeIP := strings.Split(node, ":")[0]
-		nodeIPs = append(nodeIPs, nodeIP)
+	var nodes []string
+	for _, node := range nodeAddrs {
+		ipAddr, err := validateAddr(node)
+		if err != nil {
+			log.Errorf("Not adding node to cluster %s", err.Error())
+		} else {
+			nodes = append(nodes, ipAddr)
+		}
 	}
-	localIP := strings.Split(nodeAddr, ":")[0]
-	localAddr = nodeAddr
 
-	t, err := bintree.NewTree(nodeIPs)
+	localAddr, err := validateAddr(nodeAddr)
+	if err != nil {
+		log.Fatalf("Exiting.  Unable to add local node to cluster %s", err.Error())
+	}
+	if len(nodes) < 1 {
+		log.Fatalf("Exiting. Not enough nodes for a cluster.  Nodes: %s", nodes)
+	}
+
+	t, err := bintree.NewTree(nodes)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	qms := quorums.NewQuorums(t, nodeIPs, localIP)
+	qms := quorums.NewQuorums(t, nodes, localAddr)
 	log.Debugln("Using Quorums: ", qms.MyQuorums)
 	log.Debugln("Using Peers: ", qms.Peers)
 
@@ -174,4 +184,18 @@ func (d *Dmutex) relinquish() {
 		go client.SendRelinquish(peer, clientConfig, &wg)
 	}
 	wg.Wait()
+}
+
+// validateAddr checks the given argument to verify it is an Ip Address.
+// If it is not, it tries to lookup the string to convert it into one
+func validateAddr(addr string) (string, error) {
+	if net.ParseIP(addr).To4() == nil {
+		// try converting from string to Ip Addr
+		ipAddrs, err := net.LookupHost(addr)
+		if err != nil || len(ipAddrs) < 1 {
+			return "", fmt.Errorf("Unable to use or resolve node %s", addr)
+		}
+		return ipAddrs[0], nil
+	}
+	return addr, nil
 }
