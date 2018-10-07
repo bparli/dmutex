@@ -1,3 +1,8 @@
+/*
+Package quorums is a package for initializing and maintaining the distribted mutex's quorums from the local node's perspective.
+It creates the quorums based on a binary tree of IP addresses (dependent on the dmutex/bintree package).
+The package also exposes a function to calculate and return substitute paths for a failed node in the quorum.
+*/
 package quorums
 
 import (
@@ -6,6 +11,7 @@ import (
 	"github.com/bparli/dmutex/bintree"
 )
 
+// Quorums type builds and maintains the cluster quorums using the bintree package to maintain the tree.
 type Quorums struct {
 	MyQuorums map[int][]string
 	Peers     map[string]bool
@@ -14,7 +20,8 @@ type Quorums struct {
 	localAddr string
 }
 
-func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *Quorums {
+// NewQuorums initializes the quorums from the local node's perspective based on a bintree of IP addresses and the local address.
+func NewQuorums(t *bintree.Tree, localAddr string) *Quorums {
 	treePaths := t.AllPaths()
 	myQuorums := make(map[int][]string)
 	peers := make(map[string]bool)
@@ -30,7 +37,7 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *Quorums {
 			}
 		}
 		if member == true {
-			sort.Sort(bintree.ByIp(quorum))
+			sort.Sort(bintree.ByIP(quorum))
 			myQuorums[count] = quorum
 			count++
 		}
@@ -50,8 +57,8 @@ func NewQuorums(t *bintree.Tree, nodes []string, localAddr string) *Quorums {
 	}
 }
 
-// SubstitutePaths returns possible paths starting
-// from the site’s two children and ending in leaf node
+// SubstitutePaths returns possible paths starting from the site’s two children and ending in leaf node.
+// Used in the distributed mutex algorithm when a node in the quorum has failed.
 func (q *Quorums) SubstitutePaths(node string) [][]string {
 	var paths [][]string
 	for _, treePath := range q.fullTree.NodePaths(node) {

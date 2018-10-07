@@ -6,8 +6,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// peersMap tracks which of the current peers have replied to a lock request
-// also maintains an up to date view of current peers based on failed nodes
+// peersMap tracks which of the current peers have replied to a lock request.
+// It also maintains an up to date view of current peers based on failed nodes
 type peersMap struct {
 	replies map[string]bool
 	mutex   *sync.RWMutex
@@ -18,13 +18,13 @@ func (p *peersMap) checkProgress() int {
 	defer p.mutex.Unlock()
 	for _, replied := range p.replies {
 		if !replied {
-			return ProgressNotAcquired
+			return progressNotAcquired
 		}
 	}
-	return ProgressAcquired
+	return progressAcquired
 }
 
-// ResetProgress is used to re-init reply gathering to current peers
+// ResetProgress is used to re-init reply gathering to current peers.
 func (p *peersMap) ResetProgress(currPeers map[string]bool) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -35,6 +35,7 @@ func (p *peersMap) ResetProgress(currPeers map[string]bool) {
 	}
 }
 
+// SubstitutePeer replaces a failed peer in the peers mapping with pre-calculated nodes.
 func (p *peersMap) SubstitutePeer(peer string, replace map[string]bool) {
 	log.Infof("Substituting node %s with %s", peer, replace)
 	p.mutex.Lock()
@@ -45,12 +46,14 @@ func (p *peersMap) SubstitutePeer(peer string, replace map[string]bool) {
 	}
 }
 
+// GetPeers returns the current peers of the local node.
 func (p *peersMap) GetPeers() map[string]bool {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 	return p.replies
 }
 
+// NumPeers returns the current number of peers of the local node.
 func (p *peersMap) NumPeers() int {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()

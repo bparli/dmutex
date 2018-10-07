@@ -16,10 +16,10 @@ func Test_CheckProgress(t *testing.T) {
 		testPeers.replies["127.0.0.10"] = true
 		testPeers.replies["127.0.0.11"] = false
 
-		So(testPeers.checkProgress(), ShouldEqual, ProgressNotAcquired)
+		So(testPeers.checkProgress(), ShouldEqual, progressNotAcquired)
 
 		testPeers.replies["127.0.0.11"] = true
-		So(testPeers.checkProgress(), ShouldEqual, ProgressAcquired)
+		So(testPeers.checkProgress(), ShouldEqual, progressAcquired)
 	})
 }
 
