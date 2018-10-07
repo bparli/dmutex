@@ -1,3 +1,6 @@
+/*
+Package client is a package for the grpc calls to other nodes in the cluster.
+*/
 package client
 
 import (
@@ -13,12 +16,13 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// LockError captures the rpc error and associated peer Node
+// LockError captures the rpc error and associated peer Node.
 type LockError struct {
 	Node string
 	Err  error
 }
 
+// Config is a type for keeping the neccessary configurations when making grpc calls to other nodes in the cluster.
 type Config struct {
 	RPCPort    string
 	RPCTimeout time.Duration
@@ -41,6 +45,7 @@ func setupConn(peer string, config *Config) (*grpc.ClientConn, error) {
 	return grpc.Dial(fmt.Sprintf("%s:%s", peer, config.RPCPort), opts...)
 }
 
+// SendRequest is a grpc method for sending a lock request message to another node in the quorum(s).
 func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.WaitGroup, lockReq *pb.LockReq) {
 	log.Debugln("Sending Request for lock to", peer)
 	defer wg.Done()
@@ -69,6 +74,7 @@ func SendRequest(peer string, config *Config, ch chan<- *LockError, wg *sync.Wai
 	}
 }
 
+// SendRelinquish is a grpc method for sending a lock release notification message to another node in the quorum(s).
 func SendRelinquish(peer string, config *Config, wg *sync.WaitGroup) {
 	log.Debugln("sending Relinquish lock to", peer)
 	defer wg.Done()
@@ -88,6 +94,7 @@ func SendRelinquish(peer string, config *Config, wg *sync.WaitGroup) {
 	}
 }
 
+// SendInquire is a grpc method for sending an inquire message to another node in the quorum(s).
 func SendInquire(peer string, config *Config) (*pb.InquireReply, error) {
 	log.Debugln("Sending Inquire to", peer)
 	conn, err := setupConn(peer, config)
@@ -101,6 +108,7 @@ func SendInquire(peer string, config *Config) (*pb.InquireReply, error) {
 	return cli.Inquire(ctx, &pb.Node{Node: config.LocalAddr})
 }
 
+// SendReply is a grpc method for sending a Reply message to another node in the quorum(s).
 func SendReply(reqArgs *queue.Mssg, config *Config) error {
 	// send reply to head of queue
 	log.Debugln("Sending Reply to", reqArgs)

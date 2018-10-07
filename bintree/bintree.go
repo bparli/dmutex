@@ -1,3 +1,6 @@
+/*
+Package bintree creates a binary tree of Ip Addresses for use in the distributed mutex algorithm.
+*/
 package bintree
 
 import (
@@ -9,6 +12,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Tree is used to store the root of the binary tree.
+// Each node, including the root has pointers to its decendents so the rest of the tree is reached from this point.
 type Tree struct {
 	root      *node
 	NumLeaves int
@@ -21,17 +26,26 @@ type node struct {
 	Paths [][]string
 }
 
-type ByIp []string
+// ByIP is a special type used for building the binary tree, specifically the initial sorting.
+// Len, Swap, and Less functions are used in sorting the Ipaddrs prior to building the tree.
+type ByIP []string
 
-func (a ByIp) Len() int      { return len(a) }
-func (a ByIp) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
-func (a ByIp) Less(i, j int) bool {
+// Len returns the length of the binary tree and is used for building the binary tree.
+func (a ByIP) Len() int { return len(a) }
+
+// Swap is used for building the binary tree.
+func (a ByIP) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+// Less is used for comparing nodes when building the binary tree.
+func (a ByIP) Less(i, j int) bool {
 	if res := compare(a[i], a[j]); res == -1 {
 		return true
 	}
 	return false
 }
 
+// NewTree initializes the binary tree.  It takes an array of strings representing Ip addresses.
+// It will verify the entries in the array are Ip addresses, and then builds the tree and tree paths, returning the Tree type.
 func NewTree(ipAddrs []string) (*Tree, error) {
 	// first check all are valid IPv4 addresses
 	for _, ipAddr := range ipAddrs {
@@ -42,7 +56,7 @@ func NewTree(ipAddrs []string) (*Tree, error) {
 	}
 
 	// sort list so we can build a balanced tree
-	sort.Sort(ByIp(ipAddrs))
+	sort.Sort(ByIP(ipAddrs))
 
 	newT := &Tree{NumLeaves: 0}
 
@@ -54,10 +68,12 @@ func NewTree(ipAddrs []string) (*Tree, error) {
 	return newT, nil
 }
 
+// AllPaths returns all possible paths in the tree starting from the root and ending at a leaf.
 func (t *Tree) AllPaths() [][]string {
 	return t.root.Paths
 }
 
+// NodePaths returns all possible paths in the tree starting from the node at ipAddr and ending at a leaf.
 func (t *Tree) NodePaths(ipAddr string) [][]string {
 	ch := make(chan *node, 1)
 	defer close(ch)

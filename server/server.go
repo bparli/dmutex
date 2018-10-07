@@ -1,3 +1,7 @@
+/*
+Package server is the grpc server for processing distributed lock requests.
+It contains the grpc methods as well as the request queue (dependent on dmutex/bintree and dmutex/quorums)
+*/
 package server
 
 import (
@@ -19,21 +23,24 @@ import (
 )
 
 const (
-	ProgressNotAcquired int = 0
-	ProgressAcquired    int = 1
+	progressNotAcquired int = 0
+	progressAcquired    int = 1
 )
 
 var (
 	rpcSrv *DistSyncServer
 
 	// Timeout for acquiring enough replies
-	Timeout      time.Duration
-	RPCPort      = "7070"
+	Timeout time.Duration
+	// RPCPort is the port used by all nodes in the cluster for grpc messages
+	RPCPort = "7070"
+	// Peers is a mapping of nodes which are in the same quorum(s) as the local node.
+	// Its used for tracking which peers have responded to a lock request
 	Peers        *peersMap
 	clientConfig *client.Config
 )
 
-// DistSyncServer manages RPC server and request queue
+// DistSyncServer manages grpc server and request queue
 type DistSyncServer struct {
 	localAddr string
 	reqQueue  *queue.ReqHeap
@@ -104,6 +111,7 @@ func (r *DistSyncServer) serveRequests() {
 	}
 }
 
+// Reply is a grpc method representing the Reply message of the algorithm (granting consent to enter the critical section)
 func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, error) {
 	node := &pb.Node{Node: r.localAddr}
 	log.Debugln("Incoming Reply from", reply.Node)
@@ -111,6 +119,9 @@ func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, e
 	return node, nil
 }
 
+// GatherReplies waits for and tracks replies from each peer node.
+// Its called when the local node has sent lock requests its quorum(s) and
+// returns either when all nodes have replied or the timeout has passed
 func (r *DistSyncServer) GatherReplies() error {
 	log.Debugln("Gathering Replies, waiting on ", Peers.replies)
 
@@ -161,6 +172,7 @@ func (r *DistSyncServer) DrainRepliesCh() {
 	}
 }
 
+// Request is a grpc method representing the Request message of the algorithm accepting lock requests from other nodes in the cluster
 func (r *DistSyncServer) Request(ctx context.Context, req *pb.LockReq) (*pb.Node, error) {
 	if timeStamp, err := ptypes.Timestamp(req.Tstmp); err != nil {
 		return nil, errors.New("Error converting request timestamp")
@@ -173,16 +185,19 @@ func (r *DistSyncServer) Request(ctx context.Context, req *pb.LockReq) (*pb.Node
 	return &pb.Node{Node: r.localAddr}, nil
 }
 
+// Inquire is a grpc method representing the Inquire message of the algorithm.
+// It should either block on the request if the local node has acquired the lock
+// or Yield if it has not yet acquired the lock
 func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.InquireReply, error) {
 	reply := &pb.InquireReply{
 		Yield:      false,
 		Relinquish: false,
 	}
-	if Peers.checkProgress() == ProgressAcquired {
+	if Peers.checkProgress() == progressAcquired {
 		log.Debugln("Lock already acquired, block on Inquire", inq.Node)
 		// block until the lock is ready to be released
 		for {
-			if Peers.checkProgress() != ProgressAcquired {
+			if Peers.checkProgress() != progressAcquired {
 				reply.Relinquish = true
 				break
 			}
@@ -199,6 +214,7 @@ func (r *DistSyncServer) Inquire(ctx context.Context, inq *pb.Node) (*pb.Inquire
 	return reply, nil
 }
 
+// Relinquish is a grpc method representing the Relinquish message of the algorithm (releasing the lock)
 func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*pb.Node, error) {
 	node := &pb.Node{Node: r.localAddr}
 	log.Debugln("Received relinquish from node:", relinquish.Node)
@@ -220,6 +236,12 @@ func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*
 	return node, nil
 }
 
+// NewDistSyncServer initializes the grpc server and mutex processing queue.
+// It takes as arguments:
+//  - the local node's IP address
+//  - the number of members for creating message channels
+//  - a timeout specifying grpc timeouts
+//  - optional Certificate and Key files for encrypting connections between nodes
 func NewDistSyncServer(addr string, numMembers int, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) (*DistSyncServer, error) {
 	reqQueue := &queue.ReqHeap{}
 	heap.Init(reqQueue)
