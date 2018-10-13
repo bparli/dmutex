@@ -62,8 +62,6 @@ type Dmutex struct {
 //  - optional Certificate and Key files for encrypting connections between nodes
 // It calculates the tree, quorums, initializes grpc client and server and returns the initialized distributed mutex
 func NewDMutex(nodeAddr string, nodeAddrs []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
-	log.SetLevel(log.DebugLevel)
-
 	var nodes []string
 	for _, node := range nodeAddrs {
 		ipAddr, err := validateAddr(node)
