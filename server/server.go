@@ -81,7 +81,7 @@ func (r *DistSyncServer) serveRequests() {
 		min := r.readMin()
 		if min != nil && min.Replied {
 			// Validate/health check the node holding the lock for 2 conditions:
-			// 	- If the grpc returns an error consider the node failed.  Purge the node
+			// 	- If the grpc returns an error consider the node failed.  Purge the node so rest of loop can process next in line
 			// 	- If the Validate message returns false, we might have lost the relinquish message.  Purge the node
 			if valid, err := client.SendValidate(min.Node, clientConfig); err != nil || !valid.GetHolding() {
 				r.purgeNodeFromQueue(min.Node)
@@ -249,7 +249,7 @@ func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*
 func (r *DistSyncServer) Validate(ctx context.Context, validate *pb.Node) (*pb.ValidateReply, error) {
 	log.Debugln("Received Validate from node:", validate.Node)
 	min := r.readMin()
-	if min.Node == r.localAddr {
+	if min != nil && min.Node == r.localAddr {
 		return &pb.ValidateReply{Holding: true}, nil
 	}
 	return &pb.ValidateReply{Holding: false}, nil
