@@ -126,3 +126,17 @@ func SendReply(reqArgs *queue.Mssg, config *Config) error {
 	}
 	return nil
 }
+
+// SendValidate is a grpc method for sending a Validate message to another node in the quorum(s).
+func SendValidate(peer string, config *Config) (*pb.ValidateReply, error) {
+	log.Debugln("Sending Validate to", peer)
+	conn, err := setupConn(peer, config)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	cli := pb.NewDistSyncClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), config.RPCTimeout)
+	defer cancel()
+	return cli.Validate(ctx, &pb.Node{Node: config.LocalAddr})
+}

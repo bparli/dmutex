@@ -171,6 +171,43 @@ func Test_Inquire(t *testing.T) {
 	})
 }
 
+func Test_Validate(t *testing.T) {
+	Convey("Test Validate", t, func() {
+		So(testServer.reqQueue.Len(), ShouldEqual, 0)
+
+		args := &queue.Mssg{
+			Node:    "127.0.0.1",
+			Replied: false,
+		}
+		testServer.push(args)
+
+		var opts []grpc.DialOption
+		opts = append(opts, grpc.WithInsecure())
+		conn, _ := grpc.Dial("127.0.0.1:7070", opts...)
+		defer conn.Close()
+		client := pb.NewDistSyncClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		v, err := client.Validate(ctx, &pb.Node{Node: "127.0.0.10"})
+		So(err, ShouldBeNil)
+		So(v.GetHolding(), ShouldBeTrue)
+
+		testServer.pop()
+		args = &queue.Mssg{
+			Node:    "127.0.0.99",
+			Replied: false,
+		}
+		testServer.push(args)
+
+		v, err = client.Validate(ctx, &pb.Node{Node: "127.0.0.10"})
+		So(err, ShouldBeNil)
+		So(v.GetHolding(), ShouldBeFalse)
+		testServer.pop()
+
+	})
+}
+
 func Test_UndoReplies(t *testing.T) {
 	Convey("Test undo Lock request Replies", t, func() {
 		args := &queue.Mssg{

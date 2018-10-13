@@ -21,6 +21,9 @@ service DistSync {
 
   // Inquire on status of Distributed Lock from head of queue
   rpc Inquire (Node) returns (InquireReply) {}
+
+  // Validate health of node holding Distributed Lock
+  rpc Validate (Node) returns (ValidateReply) {}
 }
 
 // Request the distributed lock
@@ -38,4 +41,9 @@ message Node {
 message InquireReply {
   bool yield = 1;
   bool relinquish = 2;
+}
+
+// Response to a Validate message.  Return True if lock is still being held
+message ValidateReply {
+  bool holding = 1;
 }

@@ -79,6 +79,14 @@ func (r *DistSyncServer) serveRequests() {
 		// there should only be one outstanding request in queue from a given node
 		r.purgeNodeFromQueue(req.Node)
 		min := r.readMin()
+		if min != nil && min.Replied {
+			// Validate/health check the node holding the lock for 2 conditions:
+			// 	- If the grpc returns an error consider the node failed.  Purge the node so rest of loop can process next in line
+			// 	- If the Validate message returns false, we might have lost the relinquish message.  Purge the node
+			if valid, err := client.SendValidate(min.Node, clientConfig); err != nil || !valid.GetHolding() {
+				r.purgeNodeFromQueue(min.Node)
+			}
+		}
 
 		timeStamp, err := ptypes.Timestamp(req.Tstmp)
 		if err != nil {
@@ -234,6 +242,17 @@ func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*
 
 	// if we get here, the node was not found.  it was already removed via the Inquire -> Relinquish flow
 	return node, nil
+}
+
+// Validate is a grpc method verifying the health of the node holding the lock.
+// Returns true if the local node is still holding the lock
+func (r *DistSyncServer) Validate(ctx context.Context, validate *pb.Node) (*pb.ValidateReply, error) {
+	log.Debugln("Received Validate from node:", validate.Node)
+	min := r.readMin()
+	if min != nil && min.Node == r.localAddr {
+		return &pb.ValidateReply{Holding: true}, nil
+	}
+	return &pb.ValidateReply{Holding: false}, nil
 }
 
 // NewDistSyncServer initializes the grpc server and mutex processing queue.

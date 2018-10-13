@@ -29,3 +29,5 @@ func dLockTest() {
   }
 }
 ```
+
+The timeout setting is used solely for acquiring the lock and not for holding the lock.  A supplemental method for sanity/health checking the lock owner is still alive and means to still hold the lock.  Its important to set the timeout for longer than the maximum time the lock is expected to be held for. 
