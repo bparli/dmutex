@@ -29,6 +29,8 @@ package dmutex
 import (
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +54,7 @@ type Dmutex struct {
 	Quorums   *quorums.Quorums
 	rpcServer *server.DistSyncServer
 	gateway   *sync.Mutex
+	nodes     map[string]bool
 }
 
 // NewDMutex is the public function for initializing the distributed lock from the local node's perspective.
@@ -62,13 +65,16 @@ type Dmutex struct {
 //  - optional Certificate and Key files for encrypting connections between nodes
 // It calculates the tree, quorums, initializes grpc client and server and returns the initialized distributed mutex
 func NewDMutex(nodeAddr string, nodeAddrs []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
+	setLogLevel()
 	var nodes []string
+	nodesMap := make(map[string]bool)
 	for _, node := range nodeAddrs {
 		ipAddr, err := validateAddr(node)
 		if err != nil {
 			log.Errorf("Not adding node to cluster %s", err.Error())
 		} else {
 			nodes = append(nodes, ipAddr)
+			nodesMap[ipAddr] = false
 		}
 	}
 
@@ -94,6 +100,7 @@ func NewDMutex(nodeAddr string, nodeAddrs []string, timeout time.Duration, tlsCr
 		Quorums:   qms,
 		rpcServer: &server.DistSyncServer{},
 		gateway:   &sync.Mutex{},
+		nodes:     nodesMap,
 	}
 
 	dmutex.rpcServer, err = server.NewDistSyncServer(localAddr, len(nodes), timeout, tlsCrtFile, tlsKeyFile)
@@ -120,19 +127,22 @@ func (d *Dmutex) Lock() error {
 	// reset Progress
 	server.Peers.ResetProgress(d.Quorums.Peers)
 	lockReq := &pb.LockReq{Node: clientConfig.LocalAddr, Tstmp: ptypes.TimestampNow()}
-	err := d.sendRequests(server.Peers.GetPeers(), lockReq)
+	err := d.sendQuorumRequests(server.Peers.GetPeers(), lockReq)
 	if err != nil {
-		log.Errorln("Error with lock:", err)
-		d.rpcServer.DrainRepliesCh()
-		d.UnLock()
-		return err
-	}
-
-	// wait for replies from others in the quorum(s)
-	if err = d.rpcServer.GatherReplies(); err != nil {
-		d.rpcServer.DrainRepliesCh()
-		d.UnLock()
-		return err
+		log.Errorf("Error with lock: %s.  Falling back to naive lock request.", err)
+		d.fallback(lockReq)
+		if err = d.rpcServer.GatherReplies(len(d.nodes)/2 + 1); err != nil {
+			d.rpcServer.DrainRepliesCh()
+			d.UnLock()
+			return err
+		}
+	} else {
+		// wait for replies from others in the quorum(s)
+		if err = d.rpcServer.GatherReplies(server.Peers.NumPeers()); err != nil {
+			d.rpcServer.DrainRepliesCh()
+			d.UnLock()
+			return err
+		}
 	}
 	return nil
 }
@@ -146,7 +156,27 @@ func (d *Dmutex) UnLock() {
 	server.Peers.ResetProgress(d.Quorums.Peers)
 }
 
-func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error {
+func (d *Dmutex) fallback(lockReq *pb.LockReq) {
+	d.broadcast(lockReq)
+	server.Peers.ResetProgress(d.nodes)
+}
+
+func (d *Dmutex) broadcast(lockReq *pb.LockReq) {
+	ch := make(chan *client.LockError, len(d.nodes))
+	var wg sync.WaitGroup
+	defer close(ch)
+	quorumPeers := server.Peers.GetPeers()
+	for peer := range d.nodes {
+		if _, ok := quorumPeers[peer]; !ok {
+			log.Debugln("Broadcasting to node", peer)
+			wg.Add(1)
+			go client.SendRequest(peer, clientConfig, ch, &wg, lockReq)
+		}
+	}
+	wg.Wait()
+}
+
+func (d *Dmutex) sendQuorumRequests(peers map[string]bool, lockReq *pb.LockReq) error {
 	ch := make(chan *client.LockError, len(peers))
 	var wg sync.WaitGroup
 	defer close(ch)
@@ -188,7 +218,7 @@ func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error 
 			if len(repPeersMap) > 0 {
 				log.Infof("Using substitute paths for failed node %s:", req.Node, subPaths)
 				// recurse with replacement path/peers
-				return d.sendRequests(repPeersMap, lockReq)
+				return d.sendQuorumRequests(repPeersMap, lockReq)
 				// return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
 			}
 		}
@@ -196,7 +226,7 @@ func (d *Dmutex) sendRequests(peers map[string]bool, lockReq *pb.LockReq) error 
 	return nil
 }
 
-// genReplacementMap is called in the case of a filed node.
+// genReplacementMap is called in the case of a failed node.
 // It creates a new map with the replacements for the failed node
 func genReplacementMap(peers map[string]bool, replacementPaths [][]string) map[string]bool {
 	var newPeers []string
@@ -241,4 +271,26 @@ func validateAddr(addr string) (string, error) {
 		return ipAddrs[0], nil
 	}
 	return addr, nil
+}
+
+func setLogLevel() {
+	levels := map[string]log.Level{
+		"DEBUG":   log.DebugLevel,
+		"INFO":    log.InfoLevel,
+		"WARNING": log.WarnLevel,
+		"ERROR":   log.ErrorLevel,
+		"FATAL":   log.FatalLevel,
+		"PANIC":   log.PanicLevel,
+	}
+	lvl, ok := os.LookupEnv("LOG_LEVEL")
+	if ok {
+		envLogLvl := strings.ToUpper(lvl)
+		if setting, ok := levels[envLogLvl]; ok {
+			log.SetLevel(setting)
+		} else {
+			log.SetLevel(log.InfoLevel)
+		}
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
 }

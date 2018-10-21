@@ -129,33 +129,33 @@ func (r *DistSyncServer) Reply(ctx context.Context, reply *pb.Node) (*pb.Node, e
 
 // GatherReplies waits for and tracks replies from each peer node.
 // Its called when the local node has sent lock requests its quorum(s) and
-// returns either when all nodes have replied or the timeout has passed
-func (r *DistSyncServer) GatherReplies() error {
+// returns either when all nodes have replied or the timeout has passed.
+// It takes an int argument representing how many of the quorum need to have replied
+// (in the common case this will be all local quorum).
+func (r *DistSyncServer) GatherReplies(quorumNum int) error {
 	log.Debugln("Gathering Replies, waiting on ", Peers.replies)
 
 	// Set the timeout clock
 	startTime := time.Now()
+	count := 0
 
 outer:
 	for {
 		select {
 		case reply := <-r.repliesCh:
 			Peers.mutex.Lock()
-			if _, ok := Peers.replies[reply.Node]; ok {
-				// set node to true since we've received a Reply
-				// when all are true we have acquired the lock
-				Peers.replies[reply.Node] = true
-				log.Debugf("Received Lock Reply from %s", reply.Node)
-
-				// Check the rest of the nodes.  if we don't have all the Replies, continue
-				for _, node := range Peers.replies {
-					if !node {
-						Peers.mutex.Unlock()
-						continue outer
-					}
+			if result, ok := Peers.replies[reply.Node]; ok {
+				// set node to true and increment count since we've received a new Reply
+				if !result {
+					count++
+					Peers.replies[reply.Node] = true
+					log.Debugf("Received Lock Reply from %s", reply.Node)
 				}
-				Peers.mutex.Unlock()
-				break outer
+				// when we've seen replies from all peers we have acquired the lock
+				if count >= quorumNum {
+					Peers.mutex.Unlock()
+					break outer
+				}
 			}
 			Peers.mutex.Unlock()
 		default:
