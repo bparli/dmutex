@@ -1,6 +1,7 @@
 package dmutex
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/bparli/dmutex/quorums"
 	"github.com/bparli/dmutex/server"
 	"github.com/golang/protobuf/ptypes"
+	log "github.com/sirupsen/logrus"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -86,5 +88,24 @@ func Test_ReplacementMap(t *testing.T) {
 		So(newPaths, ShouldContainKey, "192.168.1.12")
 		So(newPaths, ShouldContainKey, "192.168.1.13")
 		So(newPaths, ShouldContainKey, "192.168.1.11")
+	})
+}
+
+func Test_LogLevel(t *testing.T) {
+	Convey("Test setting log level", t, func() {
+		setLogLevel()
+		So(log.GetLevel(), ShouldEqual, log.InfoLevel)
+
+		os.Setenv("LOG_LEVEL", "deBUg")
+		setLogLevel()
+		So(log.GetLevel(), ShouldEqual, log.DebugLevel)
+
+		os.Setenv("LOG_LEVEL", "panic")
+		setLogLevel()
+		So(log.GetLevel(), ShouldEqual, log.PanicLevel)
+
+		os.Setenv("LOG_LEVEL", "sklsjlksd")
+		setLogLevel()
+		So(log.GetLevel(), ShouldEqual, log.InfoLevel)
 	})
 }

@@ -29,6 +29,8 @@ package dmutex
 import (
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,7 +65,7 @@ type Dmutex struct {
 //  - optional Certificate and Key files for encrypting connections between nodes
 // It calculates the tree, quorums, initializes grpc client and server and returns the initialized distributed mutex
 func NewDMutex(nodeAddr string, nodeAddrs []string, timeout time.Duration, tlsCrtFile string, tlsKeyFile string) *Dmutex {
-	log.SetLevel(log.DebugLevel)
+	setLogLevel()
 	var nodes []string
 	nodesMap := make(map[string]bool)
 	for _, node := range nodeAddrs {
@@ -269,4 +271,26 @@ func validateAddr(addr string) (string, error) {
 		return ipAddrs[0], nil
 	}
 	return addr, nil
+}
+
+func setLogLevel() {
+	levels := map[string]log.Level{
+		"DEBUG":   log.DebugLevel,
+		"INFO":    log.InfoLevel,
+		"WARNING": log.WarnLevel,
+		"ERROR":   log.ErrorLevel,
+		"FATAL":   log.FatalLevel,
+		"PANIC":   log.PanicLevel,
+	}
+	lvl, ok := os.LookupEnv("LOG_LEVEL")
+	if ok {
+		envLogLvl := strings.ToUpper(lvl)
+		if setting, ok := levels[envLogLvl]; ok {
+			log.SetLevel(setting)
+		} else {
+			log.SetLevel(log.InfoLevel)
+		}
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
 }
