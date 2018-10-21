@@ -62,8 +62,7 @@ The steps in the lock process are as follows:
 To unlock a Relinquish message is sent to all nodes that were originally sent lock Requests.
 This is ideally only peers in the local node's quorums, but in a degraded state could be more, or even all of the nodes in the cluster (as described above).
 
-Dealing with Stale Locks
-===========================
+### Dealing with Stale Locks
 
 A 'stale' lock is a lock that has been granted to a node, but for some reason that node has not released it in a reasonable timeframe.  This could happen for any number of reasons; the node crashed, the process paused, the network, etc.
 
