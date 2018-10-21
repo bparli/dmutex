@@ -58,7 +58,7 @@ func Test_BasicServer(t *testing.T) {
 		currPeers := make(map[string]bool)
 		currPeers["127.0.0.1"] = true
 		Peers.ResetProgress(currPeers)
-		errReply := testServer.GatherReplies()
+		errReply := testServer.GatherReplies(1)
 		So(errReply, ShouldBeNil)
 	})
 }
@@ -90,7 +90,7 @@ func Test_ErrorGatherReplies(t *testing.T) {
 		currPeers := make(map[string]bool)
 		currPeers["127.0.0.99"] = true
 		Peers.ResetProgress(currPeers)
-		errReply := testServer.GatherReplies()
+		errReply := testServer.GatherReplies(1)
 		So(errReply, ShouldNotBeNil)
 	})
 }
