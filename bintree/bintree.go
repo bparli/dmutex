@@ -13,7 +13,7 @@ import (
 )
 
 // Tree is used to store the root of the binary tree.
-// Each node, including the root has pointers to its decendents so the rest of the tree is reached from this point.
+// Each node, including the root has pointers to its descendants so the rest of the tree is reached from this point.
 type Tree struct {
 	root      *node
 	NumLeaves int
