@@ -1,4 +1,5 @@
 # Dmutex
+[![Go Report Card](https://goreportcard.com/badge/github.com/bparli/dmutex)](https://goreportcard.com/report/github.com/bparli/dmutex)
 
 Dmutex is a distributed mutex package written in Go.  It takes a quorum based approach to managing locks across n distributed nodes.
 
