@@ -22,7 +22,7 @@ type LockError struct {
 	Err  error
 }
 
-// Config is a type for keeping the neccessary configurations when making grpc calls to other nodes in the cluster.
+// Config is a type for keeping the necessary configurations when making grpc calls to other nodes in the cluster.
 type Config struct {
 	RPCPort    string
 	RPCTimeout time.Duration
