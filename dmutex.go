@@ -4,25 +4,6 @@ It takes a quorum based approach to managing shared locks across n distributed n
 Dmutex is initialized with the local node's address(it can be either the IP address or even the hostname), the addresses of the entire cluster, and a timeout for the gRPC calls.
 For simplicity it uses port 7070 for all nodes in the cluster.
 Optional file locations of a TLS certificate and key can be passed in order to secure cluster traffic.
-
-import (
-  "github.com/bparli/dmutex"
-)
-
-func dLockTest() {
-  nodes := []string{"192.168.1.12", "192.168.1.13", "192.168.1.14", "192.168.1.15", "192.168.1.16"}
-  dm := dmutex.NewDMutex("192.168.1.12", nodes, 3*time.Second, "server.crt", "server.key")
-
-  if err := dm.Lock(); err != nil {
-    log.Errorln("Lock error", err)
-  } else {
-    log.Debugln("Acquired Lock")
-    time.Sleep(time.Duration(100) * time.Millisecond)
-    dm.UnLock()
-    log.Debugln("Released Lock")
-    }
-  }
-}
 */
 package dmutex
 
@@ -216,7 +197,7 @@ func (d *Dmutex) sendQuorumRequests(peers map[string]bool, lockReq *pb.LockReq) 
 			repPeersMap := genReplacementMap(peers, subPaths)
 			server.Peers.SubstitutePeer(req.Node, repPeersMap)
 			if len(repPeersMap) > 0 {
-				log.Infof("Using substitute paths for failed node %s:", req.Node, subPaths)
+				log.Infof("Using substitute paths for failed node %s: %s", req.Node, subPaths)
 				// recurse with replacement path/peers
 				return d.sendQuorumRequests(repPeersMap, lockReq)
 				// return fmt.Errorf("Error: Node %s has failed and not able to substitute", req.Node)
