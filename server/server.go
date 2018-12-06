@@ -235,11 +235,12 @@ func (r *DistSyncServer) Relinquish(ctx context.Context, relinquish *pb.Node) (*
 		if (*r.reqQueue)[i].Node == relinquish.Node {
 			r.qMutex.RUnlock()
 			r.remove(i)
+			go r.processQueue()
 			return node, nil
 		}
 	}
 	r.qMutex.RUnlock()
-
+	go r.processQueue()
 	// if we get here, the node was not found.  it was already removed via the Inquire -> Relinquish flow
 	return node, nil
 }
